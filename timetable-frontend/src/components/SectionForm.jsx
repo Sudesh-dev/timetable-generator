@@ -31,32 +31,21 @@ export default function SectionForm() {
       setSemester("");
       setClassroom("");
     } catch (err) {
-      const message = err.response?.data?.error || "Failed to add section";
-      alert(message);
+      alert("Failed to add section");
     }
   };
 
   return (
-    <div>
+    <div className="card">
       <h3>Add Section</h3>
-      <input
-        placeholder="Name"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-      />
-      <input
-        type="number"
-        min="1"
-        placeholder="Semester"
-        value={semester}
-        onChange={(e) => setSemester(e.target.value)}
-      />
-      <input
-        placeholder="Classroom"
-        value={classroom}
-        onChange={(e) => setClassroom(e.target.value)}
-      />
-      <button onClick={handleSubmit}>Add</button>
+
+      <div className="form-grid">
+        <input placeholder="Name" value={name} onChange={(e)=>setName(e.target.value)} />
+        <input type="number" placeholder="Semester" value={semester} onChange={(e)=>setSemester(e.target.value)} />
+        <input placeholder="Classroom" value={classroom} onChange={(e)=>setClassroom(e.target.value)} />
+      </div>
+
+      <button onClick={handleSubmit}>+ Add Section</button>
     </div>
   );
 }

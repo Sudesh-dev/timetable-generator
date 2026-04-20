@@ -1,38 +1,43 @@
 export default function TimetableGrid({ data }) {
   const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const safeData = Array.isArray(data) ? data : [];
 
   return (
-    <table border="1">
+    <table>
       <thead>
         <tr>
           <th>Day</th>
-          {[1,2,3,4,5,6,7].map(s => <th key={s}>Slot {s}</th>)}
+          {[1,2,3,4,5,6,7].map(s => <th key={s}>S{s}</th>)}
         </tr>
       </thead>
 
       <tbody>
-        {safeData.map((day, dIndex) => (
+        {data?.map((day, dIndex) => (
           <tr key={dIndex}>
-            <td>{days[dIndex]}</td>
+            <td><b>{days[dIndex]}</b></td>
 
-            {(Array.isArray(day) ? day : []).map((cell, sIndex) => (
+            {day.map((cell, sIndex) => (
               <td key={sIndex}>
-                {cell ? (
-                  Array.isArray(cell) ? (
-                    cell.map((c, i) => (
+
+                {/* 🔥 SAFE HANDLING */}
+                {cell === null ? (
+                  <span style={{ color: "#94a3b8" }}>Free</span>
+                ) : Array.isArray(cell) ? (
+                  cell.map((c, i) => (
+                    c ? (
                       <div key={i}>
-                        {c.subjectName} ({c.batch || ""})
+                        {c.subjectName}
                       </div>
-                    ))
-                  ) : (
-                    <div>
-                      {cell.subjectName}
-                    </div>
-                  )
-                ) : "-"}
+                    ) : null
+                  ))
+                ) : (
+                  <div>
+                    {cell?.subjectName || "Free"}
+                  </div>
+                )}
+
               </td>
             ))}
+
           </tr>
         ))}
       </tbody>

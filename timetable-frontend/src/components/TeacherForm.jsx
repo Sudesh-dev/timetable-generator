@@ -14,21 +14,24 @@ export default function TeacherForm() {
       await API.post("/teachers", { name: name.trim() });
       alert("Teacher Added");
       setName("");
-    } catch (err) {
-      const message = err.response?.data?.error || "Failed to add teacher";
-      alert(message);
+    } catch {
+      alert("Failed to add teacher");
     }
   };
 
   return (
-    <div>
+    <div className="card">
       <h3>Add Teacher</h3>
-      <input
-        placeholder="Teacher Name"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-      />
-      <button onClick={handleSubmit}>Add</button>
+
+      <div className="form-grid">
+        <input
+          placeholder="Teacher Name"
+          value={name}
+          onChange={(e)=>setName(e.target.value)}
+        />
+      </div>
+
+      <button onClick={handleSubmit}>+ Add Teacher</button>
     </div>
   );
 }
