@@ -18,6 +18,21 @@ function createEmptyGrid() {
   return grid;
 }
 
+function cellHasTeacher(cell, teacherId) {
+  if (!cell) return false;
+
+  const entries = Array.isArray(cell) ? cell : [cell];
+  return entries.some((entry) => String(entry.teacherId) === String(teacherId));
+}
+
+function getPrimaryTeacherId(subject) {
+  if (!Array.isArray(subject.allowedTeachers) || subject.allowedTeachers.length === 0) {
+    return null;
+  }
+
+  return subject.allowedTeachers[0];
+}
+
 // count classes for teacher in a day
 function getTeacherCountForDay(grid, teacherId, day) {
   let count = 0;
@@ -26,9 +41,7 @@ function getTeacherCountForDay(grid, teacherId, day) {
     const cell = grid[day][s];
     if (!cell) continue;
 
-    const entries = Array.isArray(cell) ? cell : [cell];
-
-    if (entries.some(e => String(e.teacherId) === String(teacherId))) {
+    if (cellHasTeacher(cell, teacherId)) {
       count++;
     }
   }
@@ -48,7 +61,7 @@ function isTeacherFree(grid, teacherId, day, slot) {
   if (
     slot > 0 &&
     grid[day][slot - 1] &&
-    JSON.stringify(grid[day][slot - 1]).includes(teacherId)
+    cellHasTeacher(grid[day][slot - 1], teacherId)
   ) {
     return false;
   }
@@ -56,7 +69,7 @@ function isTeacherFree(grid, teacherId, day, slot) {
   if (
     slot < SLOTS - 1 &&
     grid[day][slot + 1] &&
-    JSON.stringify(grid[day][slot + 1]).includes(teacherId)
+    cellHasTeacher(grid[day][slot + 1], teacherId)
   ) {
     return false;
   }
@@ -92,13 +105,18 @@ function placeInCell(grid, day, slot, entry) {
 }
 
 // place theory subjects
-function placeTheory(grid, subjects, teachers) {
+function placeTheory(grid, subjects, teachers, warnings) {
 
   for (let sub of subjects) {
 
     let placed = 0;
 
-    const teacherId = sub.allowedTeachers[0];
+    const teacherId = getPrimaryTeacherId(sub);
+    if (!teacherId) {
+      warnings.push(`No allowed teacher assigned for theory subject ${sub.name}`);
+      continue;
+    }
+
     const teacher = teachers.find(t => String(t._id) === String(teacherId));
 
     while (placed < sub.weeklySlots) {
@@ -139,6 +157,12 @@ function placeTheory(grid, subjects, teachers) {
       // safety break (avoid infinite loop)
       if (!placedThisRound) break;
     }
+
+    if (placed < sub.weeklySlots) {
+      warnings.push(
+        `Could not fully place theory subject ${sub.name} (${placed}/${sub.weeklySlots})`
+      );
+    }
   }
 }
 
@@ -155,9 +179,7 @@ function canPlaceLab(grid, day, startSlot, duration) {
   return true;
 }
 
-function placeLab(grid, subject, teachers, roomPool) {
-
-  const teacherId = subject.allowedTeachers[0];
+function placeLab(grid, subject, teacherId, teachers, roomPool) {
   const teacher = teachers.find(t => String(t._id) === String(teacherId));
 
   const duration = subject.duration || 2;
@@ -210,29 +232,59 @@ function placeLab(grid, subject, teachers, roomPool) {
 function generateTimetable(subjects, teachers, roomPool = []) {
 
   const grid = createEmptyGrid();
+  const warnings = [];
 
   const labs = subjects.filter(s => s.type === "lab");
-  const theory = subjects.filter(s => s.type === "theory");
+  const theory = subjects.filter(s => s.type === "theory" || s.type === "tutorial");
+
+  const unsupported = subjects.filter(
+    (s) => s.type !== "lab" && s.type !== "theory" && s.type !== "tutorial"
+  );
+
+  for (const sub of unsupported) {
+    warnings.push(`Unsupported subject type ${sub.type} for ${sub.name}`);
+  }
 
   // place labs first
   for (let lab of labs) {
+    const teacherId = getPrimaryTeacherId(lab);
+    if (!teacherId) {
+      warnings.push(`No allowed teacher assigned for lab subject ${lab.name}`);
+      continue;
+    }
+
+    const batches = lab.batches && lab.batches.length > 0 ? lab.batches : ["B1"];
+    if (!roomPool || roomPool.length < batches.length) {
+      warnings.push(
+        `Not enough lab rooms for ${lab.name}: need ${batches.length}, got ${roomPool ? roomPool.length : 0}`
+      );
+      continue;
+    }
+
     let count = 0;
 
     while (count < lab.weeklySlots) {
-      const placed = placeLab(grid, lab, teachers, roomPool); // ✅ pass roomPool
+      const placed = placeLab(grid, lab, teacherId, teachers, roomPool);
 
       if (!placed) break;
 
       count++;
     }
+
+    if (count < lab.weeklySlots) {
+      warnings.push(
+        `Could not fully place lab subject ${lab.name} (${count}/${lab.weeklySlots})`
+      );
+    }
   }
 
   // place theory
-  placeTheory(grid, theory, teachers);
+  placeTheory(grid, theory, teachers, warnings);
 
   return {
     timetable: grid,
-    warnings: []
+    warnings,
+    success: warnings.length === 0
   };
 }
 

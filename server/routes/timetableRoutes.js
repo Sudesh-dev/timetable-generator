@@ -1,10 +1,14 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
+const timetableController = require("../controllers/timetableController");
 
-const { generate, getAll } = require('../controllers/timetableController'); // ✅ import both
+// ✅ specific routes FIRST
+router.post("/generate", timetableController.generateAndSave);
+router.get("/teacher/:teacherId", timetableController.getByTeacher);
+router.get("/", timetableController.getAll);
+router.put("/slot", timetableController.updateSlot);
 
-router.get('/generate', generate);   // for browser
-router.post('/generate', generate);  // for Postman
-router.get('/', getAll);             // fetch all timetables
+// ❗ dynamic route LAST
+router.get("/:sectionId", timetableController.getBySection);
 
 module.exports = router;
