@@ -6,7 +6,7 @@ body {
 
 /* container */
 #root {
-  max-width: 900px; /* 🔥 reduced for better UI */
+  max-width: 1400px;   /* 🔥 FIX */
   margin: auto;
   padding: 30px 20px;
 }

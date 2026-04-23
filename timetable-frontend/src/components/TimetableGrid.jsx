@@ -16,7 +16,6 @@ const SLOT_LABELS = [
 
 export default function TimetableGrid({ data }) {
 
-  // 🔥 MERGE LOGIC
   function getSpan(day, startIndex) {
     const cell = day[startIndex];
     if (!cell || cell.type !== "lab") return 1;
@@ -43,11 +42,7 @@ export default function TimetableGrid({ data }) {
       ));
     }
 
-    return (
-      <div>
-        {cell.subjectName}
-      </div>
-    );
+    return <div>{cell.subjectName}</div>;
   }
 
   return (
@@ -55,76 +50,75 @@ export default function TimetableGrid({ data }) {
 
       {/* HEADER */}
       <div style={{ textAlign:"center", marginBottom:20 }}>
-        <h2 >APS College of Engineering</h2>
-        
+        <h2>APS College of Engineering</h2>
         <h4>Timetable</h4>
       </div>
 
-      <div style={{ overflowX:"auto" }}>
-        <table style={{
-          width:"100%",
-          minWidth:"1200px",
-          borderCollapse:"collapse"
-        }}>
+      {/* ❌ REMOVED SCROLL WRAPPER */}
 
-          <thead>
-            <tr>
-              <th style={th}>DAY</th>
-              {SLOT_LABELS.map((s,i)=>(
-                <th key={i} style={th}>{s}</th>
-              ))}
-            </tr>
-          </thead>
+      <table style={{
+        width:"100%",
+        borderCollapse:"collapse",
+        tableLayout:"fixed"   // 🔥 IMPORTANT
+      }}>
 
-          <tbody>
-            {data.map((day,dIndex)=>{
+        <thead>
+          <tr>
+            <th style={th}>DAY</th>
+            {SLOT_LABELS.map((s,i)=>(
+              <th key={i} style={th}>{s}</th>
+            ))}
+          </tr>
+        </thead>
 
-              let skip = 0;
+        <tbody>
+          {data.map((day,dIndex)=>{
 
-              return (
-                <tr key={dIndex}>
+            let skip = 0;
 
-                  <td style={tdBold}>{DAYS[dIndex]}</td>
+            return (
+              <tr key={dIndex}>
 
-                  {day.map((cell,sIndex)=>{
+                <td style={tdBold}>{DAYS[dIndex]}</td>
 
-                    if (skip > 0) {
-                      skip--;
-                      return null;
-                    }
+                {day.map((cell,sIndex)=>{
 
-                    // BREAK
-                    if (sIndex===2 && dIndex===0) {
-                      return <td rowSpan={6} style={breakStyle}>B<br/>R<br/>E<br/>A<br/>K</td>;
-                    }
-                    if (sIndex===2) return null;
+                  if (skip > 0) {
+                    skip--;
+                    return null;
+                  }
 
-                    // LUNCH
-                    if (sIndex===5 && dIndex===0) {
-                      return <td rowSpan={6} style={lunchStyle}>L<br/>U<br/>N<br/>C<br/>H</td>;
-                    }
-                    if (sIndex===5) return null;
+                  // BREAK
+                  if (sIndex===2 && dIndex===0) {
+                    return <td rowSpan={6} style={breakStyle}>B<br/>R<br/>E<br/>A<br/>K</td>;
+                  }
+                  if (sIndex===2) return null;
 
-                    const span = getSpan(day, sIndex);
+                  // LUNCH
+                  if (sIndex===5 && dIndex===0) {
+                    return <td rowSpan={6} style={lunchStyle}>L<br/>U<br/>N<br/>C<br/>H</td>;
+                  }
+                  if (sIndex===5) return null;
 
-                    if (span > 1) {
-                      skip = span - 1;
-                    }
+                  const span = getSpan(day, sIndex);
 
-                    return (
-                      <td key={sIndex} colSpan={span} style={td}>
-                        {renderCell(cell)}
-                      </td>
-                    );
-                  })}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                  if (span > 1) {
+                    skip = span - 1;
+                  }
 
-      {/* 🔥 FACULTY TABLE */}
+                  return (
+                    <td key={sIndex} colSpan={span} style={td}>
+                      {renderCell(cell)}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      {/* FACULTY TABLE */}
       <div style={{ marginTop:30 }}>
         <h3 style={{ textAlign:"center" }}>Faculty Mapping</h3>
 
@@ -155,7 +149,6 @@ export default function TimetableGrid({ data }) {
   );
 }
 
-/* 🔥 EXTRACT SUBJECT → FACULTY */
 function extractFaculty(data) {
   const map = {};
 
@@ -183,30 +176,33 @@ function extractFaculty(data) {
 
 const th = {
   border:"1px solid #aaa",
-  padding:8,
+  padding:6,
+  fontSize:"11px",
   background:"#ffffff"
 };
 
 const td = {
   border:"1px solid #aaa",
-  padding:8,
-  minWidth:90
+  padding:6,
+  fontSize:"11px",
+  wordWrap:"break-word"
 };
 
 const tdBold = {
   ...td,
-  background:"#ffffff",
   fontWeight:"bold"
 };
 
 const breakStyle = {
   border:"1px solid #aaa",
-  background:"#ffffff",
-  textAlign:"center"
+  textAlign:"center",
+  verticalAlign:"middle",
+  fontWeight:"bold"
 };
 
 const lunchStyle = {
   border:"1px solid #aaa",
-  background:"#ffffff",
-  textAlign:"center"
+  textAlign:"center",
+  verticalAlign:"middle",
+  fontWeight:"bold"
 };
