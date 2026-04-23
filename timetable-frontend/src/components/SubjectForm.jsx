@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import API from "../api/api";
 
+/* styles */
 const input = {
   padding: "10px",
   borderRadius: "8px",
@@ -62,7 +63,9 @@ export default function SubjectForm() {
 
   const [subjectsList, setSubjectsList] = useState([]);
 
-  // 🔥 LOAD ALL DATA
+  // 🔥 NEW: FILTER STATE
+  const [filterSection, setFilterSection] = useState("");
+
   useEffect(() => {
     loadData();
     fetchSubjects();
@@ -75,7 +78,7 @@ export default function SubjectForm() {
 
       const sectionsRes = await API.get("/sections");
       setSections(sectionsRes.data);
-    } catch (err) {
+    } catch {
       alert("Failed to load teachers/sections");
     }
   };
@@ -89,7 +92,6 @@ export default function SubjectForm() {
     }
   };
 
-  // 🔥 ADD SUBJECT
   const handleSubmit = async () => {
     const parsedWeeklySlots = Number(weeklySlots);
 
@@ -104,7 +106,7 @@ export default function SubjectForm() {
     }
 
     if (!Number.isInteger(parsedWeeklySlots) || parsedWeeklySlots <= 0) {
-      alert("Weekly slots must be a positive integer");
+      alert("Weekly slots must be positive");
       return;
     }
 
@@ -119,11 +121,8 @@ export default function SubjectForm() {
       });
 
       alert("Subject Added");
-
-      // refresh table
       fetchSubjects();
 
-      // clear form
       setName("");
       setCode("");
       setType("theory");
@@ -132,18 +131,15 @@ export default function SubjectForm() {
       setSectionId("");
 
     } catch (err) {
-      const message = err.response?.data?.error || "Failed to add subject";
-      alert(message);
+      alert(err.response?.data?.error || "Failed to add subject");
     }
   };
 
-  // 🔥 DELETE
   const handleDelete = async (id) => {
     await API.delete(`/subjects/${id}`);
     fetchSubjects();
   };
 
-  // 🔥 EDIT (prefill form)
   const handleEdit = (s) => {
     setName(s.name);
     setCode(s.code);
@@ -153,122 +149,132 @@ export default function SubjectForm() {
     setSelectedTeacher(s.allowedTeachers?.[0]?._id || s.allowedTeachers?.[0]);
   };
 
+  // 🔥 FILTER LOGIC
+  const filteredSubjects = filterSection
+    ? subjectsList.filter(
+        (s) =>
+          String(s.sectionId?._id || s.sectionId) === String(filterSection)
+      )
+    : subjectsList;
+
   return (
-  <div style={{
-    maxWidth: "900px",
-    margin: "40px auto",
-    padding: "20px"
-  }}>
+    <div style={{ maxWidth: "900px", margin: "40px auto" }}>
 
-    <h2 style={{
-      marginBottom: "20px",
-      color: "#1e293b"
-    }}>
-      📘 Subject Management
-    </h2>
+      <h2 style={{ marginBottom: "20px" }}>
+        📘 Subject Management
+      </h2>
 
-    <div style={{
-      background: "#ffffff",
-      padding: "25px",
-      borderRadius: "12px",
-      boxShadow: "0 4px 12px rgba(0,0,0,0.08)"
-    }}>
-
-      <h3 style={{ marginBottom: "20px" }}>Add Subject</h3>
-
+      {/* ADD FORM */}
       <div style={{
-        display: "grid",
-        gridTemplateColumns: "1fr 1fr",
-        gap: "15px"
+        background: "#fff",
+        padding: "25px",
+        borderRadius: "12px",
+        boxShadow: "0 4px 12px rgba(0,0,0,0.08)"
       }}>
 
-        <input
-          placeholder="Subject Name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          style={input}
-        />
+        <h3>Add Subject</h3>
 
-        <input
-          placeholder="Subject Code"
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          style={input}
-        />
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: "15px"
+        }}>
 
-        <select value={type} onChange={(e) => setType(e.target.value)} style={input}>
-          <option value="theory">Theory</option>
-          <option value="lab">Lab</option>
-        </select>
+          <input placeholder="Name" value={name}
+            onChange={(e) => setName(e.target.value)} style={input} />
 
-        <input
-          type="number"
-          placeholder="Weekly Slots"
-          value={weeklySlots}
-          onChange={(e) => setWeeklySlots(e.target.value)}
-          style={input}
-        />
+          <input placeholder="Code" value={code}
+            onChange={(e) => setCode(e.target.value)} style={input} />
 
-        <select value={selectedTeacher} onChange={(e) => setSelectedTeacher(e.target.value)} style={input}>
-          <option value="">Select Teacher</option>
-          {teachers.map(t => (
-            <option key={t._id} value={t._id}>{t.name}</option>
-          ))}
-        </select>
+          <select value={type} onChange={(e) => setType(e.target.value)} style={input}>
+            <option value="theory">Theory</option>
+            <option value="lab">Lab</option>
+          </select>
 
-        <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={input}>
-          <option value="">Select Section</option>
-          {sections.map(s => (
-            <option key={s._id} value={s._id}>{s.name}</option>
-          ))}
-        </select>
+          <input type="number" placeholder="Weekly Slots"
+            value={weeklySlots}
+            onChange={(e) => setWeeklySlots(e.target.value)} style={input} />
 
+          <select value={selectedTeacher}
+            onChange={(e) => setSelectedTeacher(e.target.value)} style={input}>
+            <option value="">Select Teacher</option>
+            {teachers.map(t => (
+              <option key={t._id} value={t._id}>{t.name}</option>
+            ))}
+          </select>
+
+          <select value={sectionId}
+            onChange={(e) => setSectionId(e.target.value)} style={input}>
+            <option value="">Select Section</option>
+            {sections.map(s => (
+              <option key={s._id} value={s._id}>{s.name}</option>
+            ))}
+          </select>
+
+        </div>
+
+        <button onClick={handleSubmit} style={button}>
+          ➕ Add Subject
+        </button>
       </div>
 
-      <button onClick={handleSubmit} style={button}>
-        ➕ Add Subject
-      </button>
-    </div>
+      {/* TABLE */}
+      <div style={{
+        marginTop: "25px",
+        background: "#fff",
+        padding: "20px",
+        borderRadius: "12px",
+        boxShadow: "0 4px 12px rgba(0,0,0,0.08)"
+      }}>
 
-    {/* TABLE */}
-    <div style={{
-      marginTop: "25px",
-      background: "#fff",
-      padding: "20px",
-      borderRadius: "12px",
-      boxShadow: "0 4px 12px rgba(0,0,0,0.08)"
-    }}>
+        <h3>Saved Subjects</h3>
 
-      <h3 style={{ marginBottom: "15px" }}>Saved Subjects</h3>
+        {/* 🔥 FILTER DROPDOWN */}
+        <div style={{ marginBottom: "15px" }}>
+          <select
+            value={filterSection}
+            onChange={(e) => setFilterSection(e.target.value)}
+            style={{ ...input, width: "250px" }}
+          >
+            <option value="">All Sections</option>
+            {sections.map((s) => (
+              <option key={s._id} value={s._id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </div>
 
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead>
-          <tr style={{ background: "#f1f5f9" }}>
-            <th style={th}>Name</th>
-            <th style={th}>Code</th>
-            <th style={th}>Type</th>
-            <th style={th}>Slots</th>
-            <th style={th}>Actions</th>
-          </tr>
-        </thead>
-
-        <tbody>
-          {subjectsList.map((s) => (
-            <tr key={s._id}>
-              <td style={td}>{s.name}</td>
-              <td style={td}>{s.code}</td>
-              <td style={td}>{s.type}</td>
-              <td style={td}>{s.weeklySlots}</td>
-              <td style={td}>
-                <button style={editBtn} onClick={() => handleEdit(s)}>Edit</button>
-                <button style={deleteBtn} onClick={() => handleDelete(s._id)}>Delete</button>
-              </td>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ background: "#f1f5f9" }}>
+              <th style={th}>Name</th>
+              <th style={th}>Code</th>
+              <th style={th}>Type</th>
+              <th style={th}>Slots</th>
+              <th style={th}>Section</th>
+              <th style={th}>Actions</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
 
+          <tbody>
+            {filteredSubjects.map((s) => (
+              <tr key={s._id}>
+                <td style={td}>{s.name}</td>
+                <td style={td}>{s.code}</td>
+                <td style={td}>{s.type}</td>
+                <td style={td}>{s.weeklySlots}</td>
+                <td style={td}>{s.sectionId?.name || "N/A"}</td>
+                <td style={td}>
+                  <button style={editBtn} onClick={() => handleEdit(s)}>Edit</button>
+                  <button style={deleteBtn} onClick={() => handleDelete(s._id)}>Delete</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+      </div>
     </div>
-  </div>
-);
+  );
 }
