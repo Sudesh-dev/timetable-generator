@@ -46,7 +46,7 @@ export default function TimetableGrid({ data }) {
   }
 
   return (
-    <div style={{ background:"#ffffff", color:"#000000", padding:20 }}>
+    <div className="stack" style={{ background:"#ffffff", color:"#000000", padding:12 }}>
 
       {/* HEADER */}
       <div style={{ textAlign:"center", marginBottom:20 }}>
@@ -56,23 +56,24 @@ export default function TimetableGrid({ data }) {
 
       {/* ❌ REMOVED SCROLL WRAPPER */}
 
-      <table style={{
-        width:"100%",
-        borderCollapse:"collapse",
-        tableLayout:"fixed"   // 🔥 IMPORTANT
-      }}>
+      <div className="table-wrap">
+        <table style={{
+          width:"100%",
+          borderCollapse:"collapse",
+          tableLayout:"fixed"
+        }}>
 
-        <thead>
-          <tr>
-            <th style={th}>DAY</th>
-            {SLOT_LABELS.map((s,i)=>(
-              <th key={i} style={th}>{s}</th>
-            ))}
-          </tr>
-        </thead>
+          <thead>
+            <tr>
+              <th style={th}>DAY</th>
+              {SLOT_LABELS.map((s,i)=>(
+                <th key={i} style={th}>{s}</th>
+              ))}
+            </tr>
+          </thead>
 
-        <tbody>
-          {data.map((day,dIndex)=>{
+          <tbody>
+            {data.map((day,dIndex)=>{
 
             let skip = 0;
 
@@ -114,35 +115,38 @@ export default function TimetableGrid({ data }) {
                 })}
               </tr>
             );
-          })}
-        </tbody>
-      </table>
+            })}
+          </tbody>
+        </table>
+      </div>
 
       {/* FACULTY TABLE */}
       <div style={{ marginTop:30 }}>
         <h3 style={{ textAlign:"center" }}>Faculty Mapping</h3>
 
-        <table style={{
-          width:"100%",
-          borderCollapse:"collapse",
-          marginTop:10
-        }}>
-          <thead>
-            <tr>
-              <th style={th}>Subject</th>
-              <th style={th}>Faculty</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {extractFaculty(data).map((row, i)=>(
-              <tr key={i}>
-                <td style={td}>{row.subject}</td>
-                <td style={td}>{row.teacher}</td>
+        <div className="table-wrap">
+          <table style={{
+            width:"100%",
+            borderCollapse:"collapse",
+            marginTop:10
+          }}>
+            <thead>
+              <tr>
+                <th style={th}>Subject</th>
+                <th style={th}>Faculty</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+
+            <tbody>
+              {extractFaculty(data).map((row, i)=>(
+                <tr key={i}>
+                  <td style={td}>{row.subject}</td>
+                  <td style={td}>{row.teacher}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
     </div>

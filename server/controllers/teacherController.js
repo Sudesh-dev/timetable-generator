@@ -17,3 +17,34 @@ exports.getTeachers = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+exports.updateTeacher = async (req, res) => {
+  try {
+    const teacher = await Teacher.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+      runValidators: true,
+    });
+
+    if (!teacher) {
+      return res.status(404).json({ error: "Teacher not found" });
+    }
+
+    res.json(teacher);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.deleteTeacher = async (req, res) => {
+  try {
+    const teacher = await Teacher.findByIdAndDelete(req.params.id);
+
+    if (!teacher) {
+      return res.status(404).json({ error: "Teacher not found" });
+    }
+
+    res.json({ message: "Teacher deleted" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
