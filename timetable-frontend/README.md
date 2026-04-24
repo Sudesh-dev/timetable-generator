@@ -1,16 +1,41 @@
-# React + Vite
+# Timetable Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Frontend app for the Timetable Generator project.
 
-Currently, two official plugins are available:
+## Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- React
+- Vite
+- React Router
+- Axios
+- jsPDF
+- html2canvas
 
-## React Compiler
+## Available Pages
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- `/` setup page
+- `/teachers` teacher CRUD UI
+- `/sections` section CRUD UI
+- `/generate` timetable generation and PDF export
 
-## Expanding the ESLint configuration
+## Key UI Behavior
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+- Mobile-first responsive layout
+- Back navigation button on secondary pages
+- Empty-state blocks with light gray background when data is missing
+- Semester and section dropdown filters in setup/generate flows
+
+## Scripts
+
+```bash
+npm run dev
+npm run build
+npm run preview
+npm run lint
+```
+
+## Development Notes
+
+- API base URL is configured in `src/api/api.js`
+- Expected backend URL: `http://localhost:5000/api`
+- If API requests fail, verify backend is running and CORS is enabled

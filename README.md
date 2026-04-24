@@ -1,37 +1,43 @@
 # Timetable Generator
 
-A full-stack timetable generation app built with Node.js, Express, MongoDB, React, and Vite.
+A full-stack timetable generator built with Node.js, Express, MongoDB, React, and Vite.
 
-## What this project does
+## Features
 
-- Manage teachers, sections, and subjects
-- Generate a weekly timetable for a selected section
-- View generated timetable data in a grid
-- Edit individual timetable slots through API
-- Filter timetable data by teacher through API
+- Teacher CRUD (create, list, update, delete)
+- Section CRUD (create, list, update, delete)
+- Subject management (create, list, delete)
+- Subject filters by semester and section
+- Timetable generation by semester and section
+- PDF preview and download for generated timetable
+- Empty-state UI messaging when data is missing
+- Mobile-first responsive frontend layout
 
-## Tech stack
+## Tech Stack
 
 ### Backend
+
 - Node.js
 - Express
 - MongoDB + Mongoose
 - dotenv
 
 ### Frontend
+
 - React
 - Vite
 - Axios
 - React Router
+- jsPDF
+- html2canvas
 
-## Project structure
+## Project Structure
 
 ```text
 server/
   app.js
   server.js
   config/
-    db.js
   controllers/
   models/
   routes/
@@ -46,11 +52,11 @@ timetable-frontend/
 
 ## Prerequisites
 
-- Node.js 18+ recommended
+- Node.js 18+
 - npm
-- MongoDB (local or cloud)
+- MongoDB (local or Atlas)
 
-## Environment variables
+## Environment Variables
 
 Create a `.env` file in the project root:
 
@@ -59,13 +65,10 @@ MONGO_URI=your_mongodb_connection_string
 PORT=5000
 ```
 
-Notes:
-- `MONGO_URI` is required.
-- `PORT` is optional (defaults to `5000`).
+- `MONGO_URI` is required
+- `PORT` is optional (default `5000`)
 
-## Install dependencies
-
-From project root:
+## Installation
 
 ```bash
 npm install
@@ -73,75 +76,90 @@ cd timetable-frontend
 npm install
 ```
 
-## Run the app
+## Run Locally
 
-### 1) Start backend
-
-From project root:
+### 1) Start backend (root)
 
 ```bash
 npm run dev
 ```
 
-Backend runs on: `http://localhost:5000`
+Backend URL: `http://localhost:5000`
 
-### 2) Start frontend
-
-In a second terminal:
+### 2) Start frontend (new terminal)
 
 ```bash
 cd timetable-frontend
 npm run dev
 ```
 
-Frontend runs on Vite default URL (usually `http://localhost:5173`).
+Frontend URL: usually `http://localhost:5173`
 
-## Frontend routes
+## Frontend Routes
 
-- `/` -> Setup page (teacher, section, subject forms)
-- `/generate` -> Generate timetable page
+- `/` setup page (subject setup + navigation)
+- `/teachers` manage professors
+- `/sections` manage sections
+- `/generate` generate and export timetable
 
-## API base URL
+## API Base URL
 
-Frontend uses:
+Frontend points to:
 
 `http://localhost:5000/api`
 
-## API endpoints
+## API Endpoints
 
 ### Teachers
-- `POST /api/teachers` create teacher
-- `GET /api/teachers` list teachers
+
+- `POST /api/teachers`
+- `GET /api/teachers`
+- `PUT /api/teachers/:id`
+- `DELETE /api/teachers/:id`
 
 ### Sections
-- `POST /api/sections` create section
-- `GET /api/sections` list sections
+
+- `POST /api/sections`
+- `GET /api/sections`
+- `PUT /api/sections/:id`
+- `DELETE /api/sections/:id`
 
 ### Subjects
-- `POST /api/subjects` create subject
-- `GET /api/subjects` list subjects
-- `DELETE /api/subjects/:id` delete subject
+
+- `POST /api/subjects`
+- `GET /api/subjects`
+- `DELETE /api/subjects/:id`
 
 ### Timetable
-- `POST /api/timetable/generate` generate and save timetable for a section
-- `GET /api/timetable` list all timetables
-- `GET /api/timetable/:sectionId` get timetable by section
-- `GET /api/timetable/teacher/:teacherId` get teacher-specific timetable view
-- `PUT /api/timetable/slot` update one timetable cell
 
-## Example payloads
+- `POST /api/timetable/generate`
+- `GET /api/timetable`
+- `GET /api/timetable/:sectionId`
+- `GET /api/timetable/teacher/:teacherId`
+- `PUT /api/timetable/slot`
 
-### Create section
+## Sample Payloads
+
+### Create Section
 
 ```json
 {
-  "name": "CSE-2",
+  "name": "CSE-A",
   "semester": 4,
   "classroom": "CSLH-001"
 }
 ```
 
-### Create subject
+### Create Teacher
+
+```json
+{
+  "name": "Prof. Kumar",
+  "teacherId": "T-102"
+}
+```
+
+### Create Subject
 
 ```json
 {
@@ -154,7 +172,7 @@ Frontend uses:
 }
 ```
 
-### Generate timetable
+### Generate Timetable
 
 ```json
 {
@@ -167,47 +185,29 @@ Frontend uses:
 }
 ```
 
-### Update one slot
-
-```json
-{
-  "timetableId": "<timetable_id>",
-  "day": 0,
-  "slot": 1,
-  "value": {
-    "subjectId": "<subject_id>",
-    "subjectName": "Operating Systems",
-    "teacherId": "<teacher_id>",
-    "teacherName": "Prof A",
-    "room": "CSLH-001",
-    "type": "theory"
-  }
-}
-```
-
 ## Scripts
 
 ### Root
+
 - `npm run dev` start backend with nodemon
 
 ### Frontend
-- `npm run dev` start Vite dev server
-- `npm run build` build production assets
-- `npm run lint` lint frontend code
-- `npm run preview` preview production build
+
+- `npm run dev` start Vite
+- `npm run build` production build
+- `npm run preview` preview build
+- `npm run lint` run ESLint
 
 ## Troubleshooting
 
-- Error: `MONGO_URI` missing or connection fails
-  - Confirm `.env` is in project root and MongoDB is reachable.
+- Backend not connecting to MongoDB:
+  - Check `MONGO_URI` in `.env`
+  - Verify MongoDB service/network access
 
-- Frontend cannot reach API
-  - Ensure backend is running on `http://localhost:5000`.
-  - Ensure frontend API base URL in `timetable-frontend/src/api/api.js` matches backend host/port.
+- Frontend API errors:
+  - Ensure backend is running on `http://localhost:5000`
+  - Confirm `timetable-frontend/src/api/api.js` base URL
 
-- Timetable generation returns warnings
-  - Review subject teacher assignments, lab room count, and weekly slot constraints.
-
-## Current status
-
-The app is set up for local development with separate backend and frontend processes.
+- Generate button disabled:
+  - Select semester and section
+  - Add subjects for that semester/section first
