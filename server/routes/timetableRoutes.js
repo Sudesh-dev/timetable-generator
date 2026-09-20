@@ -3,7 +3,8 @@ const router = express.Router();
 const timetableController = require("../controllers/timetableController");
 
 // ✅ specific routes FIRST
-router.post("/generate", timetableController.generateAndSave);
+router.post("/generate", timetableController.generatePreview);
+router.post("/save", timetableController.saveGenerated);
 router.get("/teacher/:teacherId", timetableController.getByTeacher);
 router.get("/", timetableController.getAll);
 router.put("/slot", timetableController.updateSlot);

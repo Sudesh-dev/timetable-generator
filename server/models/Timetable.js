@@ -33,7 +33,7 @@ const timetableSchema = new mongoose.Schema(
       default: [],
     },
     generationContext: {
-      constraintVersion: { type: String, default: "college-v2" },
+      constraintVersion: { type: String, default: "college-v3-round-robin" },
       referencedTimetableIds: [
         {
           type: mongoose.Schema.Types.ObjectId,

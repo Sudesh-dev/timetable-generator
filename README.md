@@ -17,8 +17,10 @@ A full-stack timetable generator built with Node.js, Express, MongoDB, React, an
 - Teacher conflict checks across saved section timetables
 - Classroom and laboratory-room conflict checks
 - Retry generation with alternative valid candidate ordering
+- Round-robin subject placement with no internal student timetable gaps
 - Constraint warnings when a complete timetable is not possible
-- PDF preview and download for generated timetable
+- Explicit save-to-database confirmation after generation
+- PDF preview for saved or unsaved timetables; download only after saving
 - Empty-state UI messaging when data is missing
 - Mobile-first responsive frontend layout
 
@@ -117,6 +119,8 @@ Frontend points to:
 
 `http://localhost:5000/api`
 
+For a deployed frontend, set `VITE_API_URL` to the public backend API URL.
+
 ## API Endpoints
 
 ### Teachers
@@ -141,7 +145,8 @@ Frontend points to:
 
 ### Timetable
 
-- `POST /api/timetable/generate`
+- `POST /api/timetable/generate` (preview only; does not write to MongoDB)
+- `POST /api/timetable/save` (revalidates and saves the selected preview)
 - `GET /api/timetable`
 - `GET /api/timetable/:sectionId`
 - `GET /api/timetable/teacher/:teacherId`
@@ -154,6 +159,9 @@ The backend planner currently enforces:
 - six working days and seven teaching periods per day
 - break and lunch slots remain unavailable
 - at most one session of the same subject per section per day
+- subjects are considered in round-robin order; a temporarily invalid subject
+  is skipped and the next subject is checked
+- no unused teaching period between a day's first and last class
 - at most three teaching sessions per professor per day
 - a gap between separate sessions taught by the same professor
 - no professor assigned to two saved sections at the same time
@@ -161,6 +169,7 @@ The backend planner currently enforces:
 - no classroom or lab-room clashes with saved timetables
 - one consistent professor selected from a subject's `allowedTeachers`
 - different teachers and rooms for simultaneous batch labs
+- at most one lab rotation per batch from the same parallel group each day
 - configured teacher unavailable periods
 - an optional lower teacher session limit (never above three)
 - optional fixed placements for projects and institutional activities
@@ -175,7 +184,9 @@ Every generation request loads the other saved section timetables from MongoDB.
 Their teacher, classroom, and laboratory occupancy is treated as unavailable.
 Pressing Generate again reuses the same master data and explores a different
 ordering among equally valid candidates; no teacher, subject, or section data
-needs to be re-entered.
+needs to be re-entered. Generation returns an unsaved preview. MongoDB is only
+updated after the user clicks **Save Timetable to DB**. Preview is available in
+both states, while PDF download is enabled only for a saved timetable.
 
 ## Sample Payloads
 
@@ -290,6 +301,25 @@ Days are zero-based (`0` is Monday). Teaching grid indexes are
 The classroom saved on the selected section is authoritative during
 generation. This prevents a client from accidentally generating a timetable
 for the wrong classroom.
+
+The response contains `variationSeed` and `timetable.grid`. Send both values
+unchanged when the user confirms the save:
+
+```json
+{
+  "sectionId": "<section_id>",
+  "variationSeed": 123456789,
+  "roomPool": [
+    { "name": "Lab 1" },
+    { "name": "Lab 2" }
+  ],
+  "grid": "<exact 6 x 9 timetable.grid returned by generate>"
+}
+```
+
+Before writing, the save endpoint regenerates the candidate against the latest
+saved timetables. If teachers, rooms, subjects, or another section changed, it
+returns HTTP `409` and asks the client to generate a fresh preview.
 
 ## Scripts
 

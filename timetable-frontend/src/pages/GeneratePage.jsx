@@ -1,9 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import API from "../api/api";
 import TimetableGrid from "../components/TimetableGrid";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
+
+const ROOM_POOL = [{ name: "Lab 1" }, { name: "Lab 2" }];
+
+function normalizeTimetable(value) {
+  if (Array.isArray(value)) return { grid: value };
+  if (!value?.grid) return null;
+
+  const grid =
+    value.grid.length === 1 && Array.isArray(value.grid[0])
+      ? value.grid[0]
+      : value.grid;
+  return { ...value, grid };
+}
 
 export default function GeneratePage() {
   const navigate = useNavigate();
@@ -11,12 +24,24 @@ export default function GeneratePage() {
   const [semester, setSemester] = useState("");
   const [sectionId, setSectionId] = useState("");
   const [allSubjects, setAllSubjects] = useState([]);
-  const [subjects, setSubjects] = useState([]);
   const [timetable, setTimetable] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [isSaved, setIsSaved] = useState(false);
+  const [variationSeed, setVariationSeed] = useState(null);
 
   const [previewImg, setPreviewImg] = useState(null);
   const [showPreview, setShowPreview] = useState(false);
+  const savedLoadAbort = useRef(null);
+
+  const subjects = useMemo(() => {
+    if (!semester || !sectionId) return [];
+    return allSubjects.filter(
+      (subject) =>
+        String(subject.sectionId?._id || subject.sectionId) === String(sectionId) &&
+        String(subject.sectionId?.semester || "") === String(semester)
+    );
+  }, [semester, sectionId, allSubjects]);
 
   const handleBack = () => {
     if (window.history.length > 1) {
@@ -37,28 +62,41 @@ export default function GeneratePage() {
       .catch(() => alert("Failed to load subjects"));
   }, []);
 
-  // RESET SECTION + RESULTS WHEN SEMESTER CHANGES
-  useEffect(() => {
+  const clearTimetable = () => {
+    savedLoadAbort.current?.abort();
     setSectionId("");
-    setSubjects([]);
     setTimetable(null);
-  }, [semester]);
+    setIsSaved(false);
+    setVariationSeed(null);
+    setShowPreview(false);
+  };
 
-  // FILTER SUBJECTS FOR SELECTED SEMESTER + SECTION
+  // LOAD A PREVIOUSLY SAVED TIMETABLE FOR PREVIEW/DOWNLOAD
   useEffect(() => {
-    if (!semester || !sectionId) {
-      setSubjects([]);
-      return;
-    }
+    if (!sectionId) return undefined;
 
-    const filtered = allSubjects.filter(
-      (s) =>
-        String(s.sectionId?._id || s.sectionId) === String(sectionId) &&
-        String(s.sectionId?.semester || "") === String(semester)
-    );
+    const controller = new AbortController();
+    savedLoadAbort.current = controller;
 
-    setSubjects(filtered);
-  }, [semester, sectionId, allSubjects]);
+    API.get(`/timetable/${sectionId}`, { signal: controller.signal })
+      .then((res) => {
+        if (controller.signal.aborted) return;
+        setTimetable(normalizeTimetable(res.data));
+        setIsSaved(true);
+      })
+      .catch((err) => {
+        if (controller.signal.aborted || err.code === "ERR_CANCELED") return;
+        if (err.response?.status === 404) return;
+        alert(err.response?.data?.error || "Failed to load saved timetable");
+      })
+      .finally(() => {
+        if (savedLoadAbort.current === controller) {
+          savedLoadAbort.current = null;
+        }
+      });
+
+    return () => controller.abort();
+  }, [sectionId]);
 
   // GENERATE TIMETABLE
   const generate = async () => {
@@ -73,32 +111,50 @@ export default function GeneratePage() {
     }
 
     try {
+      savedLoadAbort.current?.abort();
       setLoading(true);
 
       const res = await API.post("/timetable/generate", {
         sectionId,
         classroom: "CSLH-001",
-        roomPool: [{ name: "Lab 1" }, { name: "Lab 2" }]
+        roomPool: ROOM_POOL
       });
 
-      let tt = res.data.timetable;
-
-      if (Array.isArray(tt)) {
-        setTimetable({ grid: tt });
-      } else if (tt.grid) {
-        let fixedGrid = tt.grid;
-
-        if (tt.grid.length === 1 && Array.isArray(tt.grid[0])) {
-          fixedGrid = tt.grid[0];
-        }
-
-        setTimetable({ ...tt, grid: fixedGrid });
-      }
+      setTimetable(normalizeTimetable(res.data.timetable));
+      setVariationSeed(res.data.variationSeed);
+      setIsSaved(false);
+      setShowPreview(false);
 
     } catch (err) {
       alert(err.response?.data?.error || "Failed");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // SAVE THE CURRENT PREVIEW ONLY AFTER EXPLICIT CONFIRMATION
+  const saveTimetable = async () => {
+    if (!timetable?.grid || variationSeed === null) {
+      alert("Generate a timetable preview before saving");
+      return;
+    }
+
+    try {
+      setSaving(true);
+      const res = await API.post("/timetable/save", {
+        sectionId,
+        roomPool: ROOM_POOL,
+        variationSeed,
+        grid: timetable.grid
+      });
+
+      setTimetable(normalizeTimetable(res.data.timetable));
+      setIsSaved(true);
+      alert("Timetable saved to the database");
+    } catch (err) {
+      alert(err.response?.data?.error || "Failed to save timetable");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -136,6 +192,11 @@ export default function GeneratePage() {
 
   // DOWNLOAD
   const downloadPDF = async () => {
+    if (!isSaved) {
+      alert("Save the timetable to the database before downloading");
+      return;
+    }
+
     const canvas = await captureFull();
     const imgData = canvas.toDataURL("image/png");
 
@@ -172,7 +233,10 @@ export default function GeneratePage() {
         <div className="form-grid">
           <select
             value={semester}
-            onChange={(e) => setSemester(e.target.value)}
+            onChange={(e) => {
+              setSemester(e.target.value);
+              clearTimetable();
+            }}
           >
             <option value="">Select Semester</option>
             {[1,2,3,4,5,6,7,8].map((sem) => (
@@ -183,8 +247,12 @@ export default function GeneratePage() {
           <select
             value={sectionId}
             onChange={(e) => {
+              savedLoadAbort.current?.abort();
               setSectionId(e.target.value);
               setTimetable(null);
+              setIsSaved(false);
+              setVariationSeed(null);
+              setShowPreview(false);
             }}
             disabled={!semester}
           >
@@ -245,11 +313,25 @@ export default function GeneratePage() {
           </div>
 
           <div className="actions-center">
+            <div className="empty-state">
+              {isSaved
+                ? "Saved in the database — preview and download are available."
+                : "Preview only — save this timetable before downloading."}
+            </div>
+
+            <button disabled={isSaved || saving || loading} onClick={saveTimetable}>
+              {isSaved ? "✓ Saved to DB" : saving ? "Saving..." : "💾 Save Timetable to DB"}
+            </button>
+
             <button onClick={previewPDF}>
               👁 Preview PDF
             </button>
 
-            <button onClick={downloadPDF}>
+            <button
+              disabled={!isSaved}
+              onClick={downloadPDF}
+              title={isSaved ? "Download timetable PDF" : "Save to DB before downloading"}
+            >
               📄 Download PDF
             </button>
           </div>

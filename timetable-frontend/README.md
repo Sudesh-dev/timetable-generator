@@ -36,7 +36,7 @@ Create a `.env` file in the project root:
 
 ```env
 MONGO_URI=your_mongodb_connection_string
-PORT=5001
+PORT=5000
 ```
 
 Start the backend:
@@ -73,10 +73,17 @@ The frontend will normally run at:
 http://localhost:5173
 ```
 
+For a deployed frontend, create `timetable-frontend/.env` with the public API
+URL, including the `/api` suffix:
+
+```env
+VITE_API_URL=https://your-backend.example.com/api
+```
+
 The backend will normally run at:
 
 ```text
-http://localhost:5001
+http://localhost:5000
 ```
 
 ## Environment variables
@@ -87,7 +94,7 @@ Example:
 
 ```env
 MONGO_URI=your_mongodb_connection_string
-PORT=5001
+PORT=5000
 ```
 
 ## Important
