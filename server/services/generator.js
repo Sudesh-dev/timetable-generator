@@ -23,7 +23,11 @@ function getId(value) {
 
 function getEntries(cell) {
   if (!cell) return [];
-  return Array.isArray(cell) ? cell : [cell];
+  if (Array.isArray(cell)) return cell.flatMap(getEntries);
+  if (Array.isArray(cell.parallelSessions)) {
+    return cell.parallelSessions.flatMap(getEntries);
+  }
+  return [cell];
 }
 
 function normalizeGrid(grid) {
@@ -64,8 +68,44 @@ function teacherNameMap(teachers) {
   );
 }
 
+function teacherPolicyMap(teachers) {
+  return new Map(
+    teachers.map((teacher) => {
+      const unavailable = new Set(
+        (Array.isArray(teacher.unavailableSlots)
+          ? teacher.unavailableSlots
+          : []
+        )
+          .map((item) => `${Number(item?.day)}:${Number(item?.slot)}`)
+      );
+      const configuredLimit = Number(teacher.maxSessionsPerDay);
+
+      return [
+        getId(teacher),
+        {
+          maxSessionsPerDay:
+            Number.isInteger(configuredLimit) && configuredLimit > 0
+              ? Math.min(configuredLimit, MAX_TEACHER_SESSIONS_PER_DAY)
+              : MAX_TEACHER_SESSIONS_PER_DAY,
+          unavailable,
+        },
+      ];
+    })
+  );
+}
+
 function existingTeacherIds(teachers) {
   return new Set(teachers.map(getId).filter(Boolean));
+}
+
+function uniqueStrings(values) {
+  return [
+    ...new Set(
+      (Array.isArray(values) ? values : [])
+        .map((value) => normalizeRoomName(value))
+        .filter(Boolean)
+    ),
+  ];
 }
 
 function getAllowedTeacherIds(subject, knownTeachers) {
@@ -78,6 +118,23 @@ function getAllowedTeacherIds(subject, knownTeachers) {
 
 function isLab(subject) {
   return String(subject.type || "").toLowerCase() === "lab";
+}
+
+function normalizeFixedSlots(value, duration) {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => ({
+      day: Number(item?.day),
+      start: Number(item?.startSlot ?? item?.start),
+    }))
+    .filter(
+      ({ day, start }) =>
+        Number.isInteger(day) &&
+        day >= 0 &&
+        day < DAYS &&
+        getContinuousStarts(duration).includes(start)
+    );
 }
 
 function getContinuousStarts(duration) {
@@ -114,53 +171,116 @@ function buildRequirements(subjects, teachers, warnings) {
     const subjectName = String(subject.name || subject.code || "Unnamed subject").trim();
     const weeklySlots = Number(subject.weeklySlots);
     const lab = isLab(subject);
-    const duration = lab ? Number(subject.duration || 2) : 1;
-    const allowedTeachers = getAllowedTeacherIds(subject, knownTeachers);
+    const type = String(subject.type || "theory").toLowerCase();
+    const configuredDuration =
+      subject.sessionDuration === null ||
+      subject.sessionDuration === undefined ||
+      subject.sessionDuration === ""
+        ? Number.NaN
+        : Number(subject.sessionDuration);
+    const duration = Number.isInteger(configuredDuration)
+      ? configuredDuration
+      : lab
+        ? Number(subject.duration || 2)
+        : 1;
+    const subjectTeachers = getAllowedTeacherIds(subject, knownTeachers);
+    const subjectRooms = uniqueStrings(subject.roomOptions);
+    const parallelGroup = String(subject.parallelGroup || "").trim();
+    const configuredFixedSlots = Array.isArray(subject.fixedSlots)
+      ? subject.fixedSlots
+      : [];
+    const fixedSlots = normalizeFixedSlots(configuredFixedSlots, duration);
 
     if (!Number.isInteger(weeklySlots) || weeklySlots < 1) {
       warnings.push(`${subjectName} has an invalid weeklySlots value.`);
       return;
     }
 
-    if (allowedTeachers.length === 0) {
-      warnings.push(`${subjectName} has no valid assigned teacher.`);
+    if (!Number.isInteger(duration) || duration < 1 || duration > 3) {
+      warnings.push(`${subjectName} must have a session duration from 1 to 3 periods.`);
       return;
     }
 
-    if (lab && (!Number.isInteger(duration) || duration < 2 || duration > 3)) {
+    if (lab && duration < 2) {
       warnings.push(`${subjectName} must have a lab duration of 2 or 3 periods.`);
       return;
     }
 
-    if (lab && weeklySlots % duration !== 0) {
+    if (configuredFixedSlots.length !== fixedSlots.length) {
       warnings.push(
-        `${subjectName} requires ${weeklySlots} weekly periods, which is not divisible by its ${duration}-period lab duration.`
+        `${subjectName} has an invalid fixed placement or a block that crosses break/lunch.`
       );
+      return;
     }
 
-    const requestedSessions = lab
-      ? Math.floor(weeklySlots / duration)
-      : weeklySlots;
-    const sessions = Math.min(requestedSessions, DAYS);
+    if (weeklySlots % duration !== 0) {
+      warnings.push(
+        `${subjectName} requires ${weeklySlots} weekly periods, which is not divisible by its ${duration}-period session duration.`
+      );
+      return;
+    }
+
+    const requestedSessions = weeklySlots / duration;
 
     if (requestedSessions > DAYS) {
       warnings.push(
         `${subjectName} requires ${requestedSessions} weekly sessions, but the one-session-per-day rule allows at most ${DAYS}.`
       );
+      return;
     }
 
-    if (sessions === 0) return;
+    const rawBatchAssignments = Array.isArray(subject.batchAssignments)
+      ? subject.batchAssignments
+      : [];
+    const assignments = rawBatchAssignments.length
+      ? rawBatchAssignments
+      : (Array.isArray(subject.batches) ? subject.batches : []).map((batch) => ({
+          batch,
+        }));
+    const variants = lab && assignments.length ? assignments : [null];
 
-    requirements.push({
-      subjectId,
-      subjectName,
-      type: lab ? "lab" : String(subject.type || "theory").toLowerCase(),
-      duration,
-      sessions,
-      remaining: sessions,
-      allowedTeachers,
-      assignedTeacherId: null,
-      usedDays: new Set(),
+    variants.forEach((assignment, batchIndex) => {
+      const batch = assignment
+        ? String(assignment.batch || "").trim()
+        : "";
+      const assignmentTeachers = assignment
+        ? getAllowedTeacherIds(assignment, knownTeachers)
+        : [];
+      const allowedTeachers = assignmentTeachers.length
+        ? assignmentTeachers
+        : subjectTeachers;
+      const roomOptions = assignment
+        ? uniqueStrings(assignment.roomOptions).concat(subjectRooms)
+        : subjectRooms;
+
+      if (assignment && !batch) {
+        warnings.push(`${subjectName} has a batch assignment without a batch name.`);
+        return;
+      }
+
+      if (allowedTeachers.length === 0) {
+        warnings.push(
+          `${subjectName}${batch ? ` (${batch})` : ""} has no valid assigned teacher.`
+        );
+        return;
+      }
+
+      requirements.push({
+        requirementId: `${subjectId}:${batch || "section"}:${batchIndex}`,
+        subjectId,
+        subjectName,
+        type,
+        duration,
+        sessions: requestedSessions,
+        remaining: requestedSessions,
+        allowedTeachers,
+        assignedTeacherId: null,
+        usedDays: new Set(),
+        batch,
+        parallelGroup: batch ? parallelGroup : "",
+        roomOptions: [...new Set(roomOptions)],
+        fixedSlots,
+      });
     });
   });
 
@@ -248,14 +368,31 @@ function createExternalState(existingTimetables) {
   return { teacherSlots, teacherDailySessions, roomSlots };
 }
 
-function createPlanningState(existingTimetables) {
+function createPlanningState(existingTimetables, teachers, variationSeed = 0) {
   return {
     grid: createEmptyGrid(),
     teacherSlots: new Map(),
     teacherDailySessions: new Map(),
+    roomSlots: new Map(),
+    subjectDays: new Map(),
+    teacherPolicies: teacherPolicyMap(teachers),
+    variationSeed: Number(variationSeed) || 0,
     external: createExternalState(existingTimetables),
     placedSessions: [],
   };
+}
+
+function seededCandidateRank(seed, ...parts) {
+  if (!seed) return 0;
+  const value = `${seed}:${parts.join(":")}`;
+  let hash = 2166136261;
+
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return hash >>> 0;
 }
 
 function ensureLocalTeacher(state, teacherId) {
@@ -269,6 +406,21 @@ function ensureLocalTeacher(state, teacherId) {
       Array.from({ length: DAYS }, () => new Set())
     );
   }
+}
+
+function ensureLocalRoom(state, room) {
+  const key = roomKey(room);
+  if (!key || state.roomSlots.has(key)) return key;
+
+  state.roomSlots.set(
+    key,
+    Array.from({ length: DAYS }, () => Array(SLOTS).fill(null))
+  );
+  return key;
+}
+
+function subjectAlreadyUsedOnDay(state, subjectId, day) {
+  return state.subjectDays.get(subjectId)?.has(day) || false;
 }
 
 function teacherSessionCount(state, teacherId, day) {
@@ -287,12 +439,19 @@ function teacherSlotValue(state, teacherId, day, slot) {
 }
 
 function teacherCanTakeBlock(state, teacherId, day, start, duration) {
-  if (teacherSessionCount(state, teacherId, day) >= MAX_TEACHER_SESSIONS_PER_DAY) {
+  const policy = state.teacherPolicies.get(teacherId) || {
+    maxSessionsPerDay: MAX_TEACHER_SESSIONS_PER_DAY,
+    unavailable: new Set(),
+  };
+
+  if (teacherSessionCount(state, teacherId, day) >= policy.maxSessionsPerDay) {
     return false;
   }
 
   for (let offset = 0; offset < duration; offset++) {
-    if (teacherSlotValue(state, teacherId, day, start + offset)) return false;
+    const slot = start + offset;
+    if (policy.unavailable.has(`${day}:${slot}`)) return false;
+    if (teacherSlotValue(state, teacherId, day, slot)) return false;
   }
 
   // A multi-period lab is one continuous session. Only its outside edges are
@@ -316,20 +475,46 @@ function roomIsFree(state, room, day, start, duration) {
   if (!key) return true;
 
   const externalRoom = state.external.roomSlots.get(key);
+  const localRoom = state.roomSlots.get(key);
   for (let offset = 0; offset < duration; offset++) {
-    if (externalRoom?.[day]?.[start + offset]) return false;
+    const slot = start + offset;
+    if (externalRoom?.[day]?.[slot] || localRoom?.[day]?.[slot]) return false;
   }
   return true;
 }
 
-function sectionSlotsAreFree(state, day, start, duration) {
+function getPlanningEntries(cell) {
+  if (!cell) return [];
+  return Array.isArray(cell) ? cell : [cell];
+}
+
+function sectionCanTakeBlock(state, requirement, day, start) {
+  const duration = requirement.duration;
+
   for (let offset = 0; offset < duration; offset++) {
-    if (state.grid[day][start + offset] !== null) return false;
+    const entries = getPlanningEntries(state.grid[day][start + offset]);
+    if (entries.length === 0) continue;
+    if (!requirement.parallelGroup || !requirement.batch) return false;
+
+    const compatible = entries.every(
+      (entry) =>
+        entry.parallelGroup === requirement.parallelGroup &&
+        entry.groupBlockId ===
+          `parallel-${requirement.parallelGroup}:${day}:${start}:${duration}` &&
+        entry.batch !== requirement.batch
+    );
+
+    if (!compatible) return false;
   }
+
   return true;
 }
 
 function getCandidateRooms(requirement, classroom, roomPool) {
+  if (requirement.roomOptions.length > 0) {
+    return requirement.roomOptions;
+  }
+
   if (requirement.type !== "lab") return [classroom];
 
   const rooms = roomPool
@@ -389,9 +574,19 @@ function enumerateCandidates(state, requirement, classroom, roomPool) {
 
   for (let day = 0; day < DAYS; day++) {
     if (requirement.usedDays.has(day)) continue;
+    if (subjectAlreadyUsedOnDay(state, requirement.subjectId, day)) continue;
 
     for (const start of starts) {
-      if (!sectionSlotsAreFree(state, day, start, requirement.duration)) continue;
+      if (
+        requirement.fixedSlots.length > 0 &&
+        !requirement.fixedSlots.some(
+          (fixed) => fixed.day === day && fixed.start === start
+        )
+      ) {
+        continue;
+      }
+
+      if (!sectionCanTakeBlock(state, requirement, day, start)) continue;
 
       for (const teacherId of teachers) {
         if (!teacherCanTakeBlock(state, teacherId, day, start, requirement.duration)) {
@@ -408,7 +603,16 @@ function enumerateCandidates(state, requirement, classroom, roomPool) {
             room,
             cost:
               compactnessCost(state.grid, day, start, requirement.duration) +
-              teacherSessionCount(state, teacherId, day) * 5,
+              teacherSessionCount(state, teacherId, day) * 5 -
+              (state.grid[day][start] !== null ? 250 : 0),
+            rank: seededCandidateRank(
+              state.variationSeed,
+              requirement.requirementId,
+              day,
+              start,
+              teacherId,
+              room
+            ),
           });
         }
       }
@@ -417,6 +621,7 @@ function enumerateCandidates(state, requirement, classroom, roomPool) {
 
   return candidates.sort((a, b) => {
     if (a.cost !== b.cost) return a.cost - b.cost;
+    if (a.rank !== b.rank) return a.rank - b.rank;
     if (a.day !== b.day) return a.day - b.day;
     if (a.start !== b.start) return a.start - b.start;
     return a.teacherId.localeCompare(b.teacherId);
@@ -452,7 +657,14 @@ function selectNextRequirement(state, requirements, classroom, roomPool) {
   return best;
 }
 
-function buildEntry(requirement, teacherId, teacherNames, room, blockId) {
+function buildEntry(
+  requirement,
+  teacherId,
+  teacherNames,
+  room,
+  blockId,
+  groupBlockId
+) {
   return {
     subjectId: requirement.subjectId,
     subjectName: requirement.subjectName,
@@ -461,27 +673,60 @@ function buildEntry(requirement, teacherId, teacherNames, room, blockId) {
     room,
     type: requirement.type,
     blockId: requirement.duration > 1 ? blockId : null,
+    groupBlockId,
+    duration: requirement.duration,
+    batch: requirement.batch || null,
+    parallelGroup: requirement.parallelGroup || null,
   };
+}
+
+function addPlanningEntry(grid, day, slot, entry) {
+  const existing = grid[day][slot];
+  if (!existing) {
+    grid[day][slot] = [entry];
+    return;
+  }
+
+  if (Array.isArray(existing)) {
+    existing.push(entry);
+    return;
+  }
+
+  grid[day][slot] = [existing, entry];
+}
+
+function removePlanningEntry(grid, day, slot, sessionKey) {
+  const remaining = getPlanningEntries(grid[day][slot]).filter(
+    (entry) => entry.sessionKey !== sessionKey
+  );
+  grid[day][slot] = remaining.length ? remaining : null;
 }
 
 function placeCandidate(state, requirement, candidate, teacherNames) {
   const previousAssignment = requirement.assignedTeacherId;
-  const sessionKey = `${requirement.subjectId}:${candidate.day}:${candidate.start}`;
+  const sessionKey = `${requirement.requirementId}:${candidate.day}:${candidate.start}`;
   const blockId = `block-${sessionKey}`;
+  const groupBlockId = requirement.parallelGroup
+    ? `parallel-${requirement.parallelGroup}:${candidate.day}:${candidate.start}:${requirement.duration}`
+    : null;
   const entry = buildEntry(
     requirement,
     candidate.teacherId,
     teacherNames,
     candidate.room,
-    blockId
+    blockId,
+    groupBlockId
   );
+  entry.sessionKey = sessionKey;
 
   ensureLocalTeacher(state, candidate.teacherId);
+  const room = ensureLocalRoom(state, candidate.room);
 
   for (let offset = 0; offset < requirement.duration; offset++) {
     const slot = candidate.start + offset;
-    state.grid[candidate.day][slot] = entry;
+    addPlanningEntry(state.grid, candidate.day, slot, entry);
     state.teacherSlots.get(candidate.teacherId)[candidate.day][slot] = sessionKey;
+    if (room) state.roomSlots.get(room)[candidate.day][slot] = sessionKey;
   }
 
   state.teacherDailySessions
@@ -490,6 +735,10 @@ function placeCandidate(state, requirement, candidate, teacherNames) {
   state.placedSessions.push({ requirement, candidate, sessionKey });
   requirement.assignedTeacherId = candidate.teacherId;
   requirement.usedDays.add(candidate.day);
+  if (!state.subjectDays.has(requirement.subjectId)) {
+    state.subjectDays.set(requirement.subjectId, new Set());
+  }
+  state.subjectDays.get(requirement.subjectId).add(candidate.day);
   requirement.remaining--;
 
   return { previousAssignment, sessionKey };
@@ -498,8 +747,12 @@ function placeCandidate(state, requirement, candidate, teacherNames) {
 function removeCandidate(state, requirement, candidate, placement) {
   for (let offset = 0; offset < requirement.duration; offset++) {
     const slot = candidate.start + offset;
-    state.grid[candidate.day][slot] = null;
+    removePlanningEntry(state.grid, candidate.day, slot, placement.sessionKey);
     state.teacherSlots.get(candidate.teacherId)[candidate.day][slot] = null;
+    const room = roomKey(candidate.room);
+    if (room && state.roomSlots.has(room)) {
+      state.roomSlots.get(room)[candidate.day][slot] = null;
+    }
   }
 
   state.teacherDailySessions
@@ -507,26 +760,40 @@ function removeCandidate(state, requirement, candidate, placement) {
     .delete(placement.sessionKey);
   state.placedSessions.pop();
   requirement.usedDays.delete(candidate.day);
+  state.subjectDays.get(requirement.subjectId)?.delete(candidate.day);
   requirement.remaining++;
   requirement.assignedTeacherId = placement.previousAssignment;
 }
 
 function clonePlannerSnapshot(state, requirements) {
   return {
-    grid: state.grid.map((day) => day.slice()),
+    grid: state.grid.map((day) =>
+      day.map((cell) => (Array.isArray(cell) ? cell.slice() : cell))
+    ),
     placedCount: state.placedSessions.length,
     gapCount: gridGapCount(state.grid),
-    remainingBySubject: new Map(
+    remainingByRequirement: new Map(
       requirements.map((requirement) => [
-        requirement.subjectId,
+        requirement.requirementId,
         requirement.remaining,
       ])
     ),
   };
 }
 
-function solve(requirements, teachers, classroom, roomPool, existingTimetables) {
-  const state = createPlanningState(existingTimetables);
+function solve(
+  requirements,
+  teachers,
+  classroom,
+  roomPool,
+  existingTimetables,
+  variationSeed
+) {
+  const state = createPlanningState(
+    existingTimetables,
+    teachers,
+    variationSeed
+  );
   const teacherNames = teacherNameMap(teachers);
   const startedAt = Date.now();
   let nodes = 0;
@@ -599,8 +866,49 @@ function solve(requirements, teachers, classroom, roomPool, existingTimetables) 
     grid: best.grid,
     complete,
     searchLimitReached,
-    remainingBySubject: best.remainingBySubject,
+    remainingByRequirement: best.remainingByRequirement,
   };
+}
+
+function publicEntry(entry) {
+  if (!entry || typeof entry !== "object") return entry;
+  const { sessionKey, ...value } = entry;
+  return value;
+}
+
+function describeParallelEntry(entry) {
+  const batch = entry.batch ? ` (${entry.batch})` : "";
+  const room = entry.room ? ` - [${entry.room}]` : "";
+  return `${entry.subjectName}${batch}${room}`;
+}
+
+function finalizeGrid(grid) {
+  return grid.map((day) =>
+    day.map((cell) => {
+      const entries = getPlanningEntries(cell);
+      if (entries.length === 0) return null;
+      if (entries.length === 1) return publicEntry(entries[0]);
+
+      const sorted = entries
+        .slice()
+        .sort((a, b) => String(a.batch || "").localeCompare(String(b.batch || "")));
+      const parallelSessions = sorted.map(publicEntry);
+
+      return {
+        subjectId: sorted.map((entry) => entry.subjectId).join("+"),
+        subjectName: sorted.map(describeParallelEntry).join(" / "),
+        teacherId: null,
+        teacherName: sorted.map((entry) => entry.teacherName).join(" / "),
+        room: sorted.map((entry) => entry.room).join(" / "),
+        type: "parallel-lab",
+        blockId: sorted[0].groupBlockId,
+        groupBlockId: sorted[0].groupBlockId,
+        duration: sorted[0].duration,
+        parallelGroup: sorted[0].parallelGroup,
+        parallelSessions,
+      };
+    })
+  );
 }
 
 function generateTimetable(subjects, teachers, roomPool = [], options = {}) {
@@ -632,7 +940,10 @@ function generateTimetable(subjects, teachers, roomPool = [], options = {}) {
   }
 
   if (
-    requirements.some((requirement) => requirement.type === "lab") &&
+    requirements.some(
+      (requirement) =>
+        requirement.type === "lab" && requirement.roomOptions.length === 0
+    ) &&
     safeRoomPool.length === 0
   ) {
     warnings.push("No lab rooms were supplied; the fallback room name 'Lab' was used.");
@@ -643,14 +954,16 @@ function generateTimetable(subjects, teachers, roomPool = [], options = {}) {
     safeTeachers,
     classroom,
     safeRoomPool,
-    existingTimetables
+    existingTimetables,
+    options.variationSeed
   );
 
   requirements.forEach((requirement) => {
-    const remaining = result.remainingBySubject.get(requirement.subjectId) || 0;
+    const remaining =
+      result.remainingByRequirement.get(requirement.requirementId) || 0;
     if (remaining > 0) {
       warnings.push(
-        `Could not place ${remaining} session${remaining === 1 ? "" : "s"} for ${requirement.subjectName} without breaking a timetable constraint.`
+        `Could not place ${remaining} session${remaining === 1 ? "" : "s"} for ${requirement.subjectName}${requirement.batch ? ` (${requirement.batch})` : ""} without breaking a timetable constraint.`
       );
     }
   });
@@ -660,7 +973,7 @@ function generateTimetable(subjects, teachers, roomPool = [], options = {}) {
   }
 
   return {
-    timetable: result.grid,
+    timetable: finalizeGrid(result.grid),
     warnings: [...new Set(warnings)],
     success: result.complete && warnings.length === 0,
   };
@@ -672,6 +985,7 @@ module.exports = {
   TEACHING_SLOTS,
   MAX_TEACHER_SESSIONS_PER_DAY,
   createEmptyGrid,
+  getEntries,
   normalizeGrid,
   generateTimetable,
 };

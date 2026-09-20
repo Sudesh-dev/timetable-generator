@@ -32,6 +32,15 @@ const timetableSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+    generationContext: {
+      constraintVersion: { type: String, default: "college-v2" },
+      referencedTimetableIds: [
+        {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Timetable",
+        },
+      ],
+    },
     generatedAt: {
       type: Date,
       default: Date.now,

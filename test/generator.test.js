@@ -3,9 +3,11 @@ const assert = require("node:assert/strict");
 const mongoose = require("mongoose");
 
 const Timetable = require("../server/models/Timetable");
+const Subject = require("../server/models/Subject");
 const {
   TEACHING_SLOTS,
   generateTimetable,
+  getEntries,
   normalizeGrid,
 } = require("../server/services/generator");
 
@@ -30,7 +32,7 @@ function scheduledCells(grid) {
     TEACHING_SLOTS.flatMap((slot) => {
       const cell = day[slot];
       if (!cell) return [];
-      const entries = Array.isArray(cell) ? cell : [cell];
+      const entries = getEntries(cell);
       return entries.map((entry) => ({ day: dayIndex, slot, entry }));
     })
   );
@@ -41,8 +43,10 @@ function teacherSessionsForDay(grid, teacherId, dayIndex) {
 
   for (let position = 0; position < TEACHING_SLOTS.length; position++) {
     const slot = TEACHING_SLOTS[position];
-    const entry = grid[dayIndex][slot];
-    if (!entry || String(entry.teacherId) !== String(teacherId)) continue;
+    const entry = getEntries(grid[dayIndex][slot]).find(
+      (item) => String(item.teacherId) === String(teacherId)
+    );
+    if (!entry) continue;
 
     const key = entry.blockId || `theory-${dayIndex}-${slot}`;
     const existing = sessions.find((session) => session.key === key);
@@ -110,7 +114,11 @@ test("generates from arbitrary database subjects and exact weekly slots", () => 
 });
 
 test("enforces subject-per-day and teacher workload/gap constraints", () => {
-  const teachers = [teacher("t1"), teacher("t2"), teacher("t3")];
+  const teachers = [
+    { ...teacher("t1"), maxSessionsPerDay: 99, requiresGap: false },
+    teacher("t2"),
+    teacher("t3"),
+  ];
   const subjects = [
     subject("a", "A", 5, ["t1"]),
     subject("b", "B", 5, ["t2"]),
@@ -285,4 +293,342 @@ test("normalizes old wrapped grids and the model now stores a true 6 x 9 grid", 
   assert.equal(document.grid.length, 6);
   assert.equal(document.grid[0].length, 9);
   assert.equal(Array.isArray(document.grid[0][0]), false);
+});
+
+test("Mongoose sessionDuration defaults do not turn ordinary subjects into zero-length blocks", () => {
+  const modelSubject = new Subject({
+    name: "Database Systems",
+    code: "DBS",
+    type: "theory",
+    weeklySlots: 2,
+    sectionId: new mongoose.Types.ObjectId(),
+    allowedTeachers: [new mongoose.Types.ObjectId()],
+  });
+  const teacherId = String(modelSubject.allowedTeachers[0]);
+
+  const result = generateTimetable(
+    [modelSubject],
+    [teacher(teacherId)],
+    [],
+    { classroom: "CSLH-100" }
+  );
+
+  assert.equal(result.success, true, result.warnings.join("\n"));
+  assert.equal(scheduledCells(result.timetable).length, 2);
+});
+
+test("combines B1 B2 and B3 lab rotations without teacher or room clashes", () => {
+  const teachers = [
+    teacher("ml-1"),
+    teacher("ml-2"),
+    teacher("ml-3"),
+    teacher("dev-1"),
+    teacher("dev-2"),
+    teacher("dev-3"),
+  ];
+  const makeAssignments = (prefix, rooms) =>
+    ["B1", "B2", "B3"].map((batch, index) => ({
+      batch,
+      allowedTeachers: [`${prefix}-${index + 1}`],
+      roomOptions: [rooms[index]],
+    }));
+  const subjects = [
+    subject("ml-lab", "Machine Learning Lab", 2, [], {
+      type: "lab",
+      duration: 2,
+      parallelGroup: "sixth-sem-labs",
+      batchAssignments: makeAssignments("ml", ["Lab 1", "Lab 2", "Lab 3"]),
+    }),
+    subject("dev-lab", "DevOps Lab", 2, [], {
+      type: "lab",
+      duration: 2,
+      parallelGroup: "sixth-sem-labs",
+      batchAssignments: makeAssignments("dev", ["Lab 4", "Lab 5", "Lab 6"]),
+    }),
+  ];
+
+  const result = generateTimetable(subjects, teachers, [], {
+    classroom: "CSLH-101",
+  });
+
+  assert.equal(result.success, true, result.warnings.join("\n"));
+  const cells = scheduledCells(result.timetable);
+  assert.equal(cells.length, 12);
+
+  const sessions = new Map();
+  cells.forEach(({ day, slot, entry }) => {
+    const key = entry.blockId;
+    if (!sessions.has(key)) sessions.set(key, { day, slots: [], entry });
+    sessions.get(key).slots.push(slot);
+  });
+  assert.equal(sessions.size, 6);
+  sessions.forEach(({ slots }) => assert.equal(slots.length, 2));
+
+  const parallelBlocks = new Map();
+  result.timetable.forEach((day, dayIndex) => {
+    TEACHING_SLOTS.forEach((slot) => {
+      const cell = day[slot];
+      if (!cell?.parallelSessions) return;
+      if (!parallelBlocks.has(cell.blockId)) {
+        parallelBlocks.set(cell.blockId, {
+          day: dayIndex,
+          slots: [],
+          sessions: cell.parallelSessions,
+        });
+      }
+      parallelBlocks.get(cell.blockId).slots.push(slot);
+    });
+  });
+
+  assert.equal(parallelBlocks.size, 3);
+  parallelBlocks.forEach(({ slots, sessions: entries }) => {
+    assert.equal(slots.length, 2);
+    assert.equal(entries.length, 2);
+    assert.equal(new Set(entries.map((entry) => entry.batch)).size, 2);
+    assert.equal(new Set(entries.map((entry) => entry.teacherId)).size, 2);
+    assert.equal(new Set(entries.map((entry) => entry.room)).size, 2);
+  });
+
+  for (const subjectId of ["ml-lab", "dev-lab"]) {
+    const batches = new Set(
+      cells
+        .filter(({ entry }) => entry.subjectId === subjectId)
+        .map(({ entry }) => entry.batch)
+    );
+    assert.deepEqual([...batches].sort(), ["B1", "B2", "B3"]);
+  }
+});
+
+test("uses nested saved parallel labs when checking previous timetable clashes", () => {
+  const existingGrid = Array.from({ length: 6 }, () => Array(9).fill(null));
+  const parallelSessions = [
+    {
+      subjectId: "old-ml",
+      subjectName: "Existing ML Lab",
+      teacherId: "t1",
+      teacherName: "T1",
+      room: "Lab 1",
+      type: "lab",
+      blockId: "old-ml-block",
+      batch: "B1",
+    },
+    {
+      subjectId: "old-dev",
+      subjectName: "Existing DevOps Lab",
+      teacherId: "other",
+      teacherName: "Other",
+      room: "Lab 2",
+      type: "lab",
+      blockId: "old-dev-block",
+      batch: "B2",
+    },
+  ];
+  const composite = {
+    subjectName: "Existing ML Lab / Existing DevOps Lab",
+    type: "parallel-lab",
+    blockId: "existing-parallel",
+    parallelSessions,
+  };
+  existingGrid[0][0] = composite;
+  existingGrid[0][1] = composite;
+
+  const result = generateTimetable(
+    [
+      subject("new-lab", "New Laboratory", 2, ["t1"], {
+        type: "lab",
+        duration: 2,
+        roomOptions: ["Lab 1"],
+      }),
+    ],
+    [teacher("t1")],
+    [],
+    {
+      classroom: "CSLH-102",
+      existingTimetables: [{ classroom: "OTHER", grid: existingGrid }],
+    }
+  );
+
+  assert.equal(result.success, true, result.warnings.join("\n"));
+  assert.equal(result.timetable[0][0], null);
+  assert.equal(result.timetable[0][1], null);
+  assert.equal(result.timetable[0][3], null);
+});
+
+test("honors configured teacher availability and fixed multi-period sessions", () => {
+  const teachers = [
+    {
+      ...teacher("project-guide"),
+      unavailableSlots: [{ day: 0, slot: 0 }],
+    },
+  ];
+  const subjects = [
+    subject("project", "Project Phase I", 2, ["project-guide"], {
+      type: "project",
+      sessionDuration: 2,
+      fixedSlots: [{ day: 2, startSlot: 6 }],
+    }),
+  ];
+
+  const result = generateTimetable(subjects, teachers, [], {
+    classroom: "CSLH-103",
+  });
+
+  assert.equal(result.success, true, result.warnings.join("\n"));
+  assert.equal(result.timetable[2][6].subjectId, "project");
+  assert.equal(result.timetable[2][7].subjectId, "project");
+  assert.equal(result.timetable[2][6].blockId, result.timetable[2][7].blockId);
+});
+
+test("fails clearly when a locked block conflicts with saved teacher activity", () => {
+  const existingGrid = Array.from({ length: 6 }, () => Array(9).fill(null));
+  existingGrid[2][6] = {
+    subjectId: "existing",
+    subjectName: "Existing Section",
+    teacherId: "guide",
+    teacherName: "Guide",
+    room: "OTHER",
+    type: "theory",
+  };
+
+  const result = generateTimetable(
+    [
+      subject("locked", "Locked Project", 2, ["guide"], {
+        type: "project",
+        sessionDuration: 2,
+        fixedSlots: [{ day: 2, startSlot: 6 }],
+      }),
+    ],
+    [teacher("guide")],
+    [],
+    {
+      classroom: "CSLH-104",
+      existingTimetables: [{ classroom: "OTHER", grid: existingGrid }],
+    }
+  );
+
+  assert.equal(result.success, false);
+  assert.match(result.warnings.join(" "), /Could not place 1 session.*Locked Project/i);
+});
+
+test("retry seeds explore another valid placement without relaxing constraints", () => {
+  const subjects = [subject("retry", "Retry Subject", 1, ["t1"])];
+  const teachers = [teacher("t1")];
+  const first = generateTimetable(subjects, teachers, [], {
+    classroom: "CSLH-105",
+    variationSeed: 101,
+  });
+  const second = generateTimetable(subjects, teachers, [], {
+    classroom: "CSLH-105",
+    variationSeed: 202,
+  });
+
+  assert.equal(first.success, true);
+  assert.equal(second.success, true);
+
+  const firstPlacement = scheduledCells(first.timetable)[0];
+  const secondPlacement = scheduledCells(second.timetable)[0];
+  assert.notDeepEqual(
+    [firstPlacement.day, firstPlacement.slot],
+    [secondPlacement.day, secondPlacement.slot]
+  );
+});
+
+test("builds a college-style week with fixed activities and three-way lab rotations", () => {
+  const teacherIds = [
+    "theory-1",
+    "theory-2",
+    "theory-3",
+    "theory-4",
+    "theory-5",
+    "activity-1",
+    "activity-2",
+    "lab-1",
+    "lab-2",
+    "lab-3",
+  ];
+  const batchAssignments = (teacherId, room) =>
+    ["B1", "B2", "B3"].map((batch) => ({
+      batch,
+      allowedTeachers: [teacherId],
+      roomOptions: [room],
+    }));
+  const subjects = [
+    subject("theory-a", "Theory A", 4, ["theory-1"]),
+    subject("theory-b", "Theory B", 4, ["theory-2"]),
+    subject("theory-c", "Theory C", 4, ["theory-3"]),
+    subject("theory-d", "Theory D", 4, ["theory-4"]),
+    subject("theory-e", "Theory E", 4, ["theory-5"]),
+    subject("skill", "Skill Development", 2, ["activity-1"], {
+      type: "activity",
+      sessionDuration: 2,
+      fixedSlots: [{ day: 0, startSlot: 6 }],
+    }),
+    subject("project", "Project Phase I", 2, ["activity-2"], {
+      type: "project",
+      sessionDuration: 2,
+      fixedSlots: [{ day: 1, startSlot: 6 }],
+    }),
+    subject("lab-a", "Machine Learning Lab", 2, [], {
+      type: "lab",
+      duration: 2,
+      parallelGroup: "semester-lab-rotation",
+      batchAssignments: batchAssignments("lab-1", "Lab 1"),
+    }),
+    subject("lab-b", "DevOps Lab", 2, [], {
+      type: "lab",
+      duration: 2,
+      parallelGroup: "semester-lab-rotation",
+      batchAssignments: batchAssignments("lab-2", "Lab 2"),
+    }),
+    subject("lab-c", "Web Lab", 2, [], {
+      type: "lab",
+      duration: 2,
+      parallelGroup: "semester-lab-rotation",
+      batchAssignments: batchAssignments("lab-3", "Lab 3"),
+    }),
+  ];
+
+  const result = generateTimetable(
+    subjects,
+    teacherIds.map((id) => teacher(id)),
+    [],
+    { classroom: "CSLH-201", variationSeed: 2026 }
+  );
+
+  assert.equal(result.success, true, result.warnings.join("\n"));
+  const cells = scheduledCells(result.timetable);
+  const periodCounts = new Map();
+  cells.forEach(({ entry }) => {
+    periodCounts.set(
+      entry.subjectId,
+      (periodCounts.get(entry.subjectId) || 0) + 1
+    );
+  });
+
+  ["theory-a", "theory-b", "theory-c", "theory-d", "theory-e"].forEach(
+    (subjectId) => assert.equal(periodCounts.get(subjectId), 4)
+  );
+  assert.equal(periodCounts.get("skill"), 2);
+  assert.equal(periodCounts.get("project"), 2);
+  ["lab-a", "lab-b", "lab-c"].forEach((subjectId) =>
+    assert.equal(periodCounts.get(subjectId), 6)
+  );
+
+  const parallelBlocks = new Map();
+  result.timetable.forEach((day) => {
+    TEACHING_SLOTS.forEach((slot) => {
+      const cell = day[slot];
+      if (cell?.type === "parallel-lab") {
+        parallelBlocks.set(cell.blockId, cell.parallelSessions);
+      }
+    });
+  });
+
+  assert.equal(parallelBlocks.size, 3);
+  parallelBlocks.forEach((entries) => {
+    assert.equal(entries.length, 3);
+    assert.equal(new Set(entries.map((entry) => entry.batch)).size, 3);
+    assert.equal(new Set(entries.map((entry) => entry.teacherId)).size, 3);
+    assert.equal(new Set(entries.map((entry) => entry.room)).size, 3);
+  });
 });

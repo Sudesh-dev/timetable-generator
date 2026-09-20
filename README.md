@@ -11,8 +11,12 @@ A full-stack timetable generator built with Node.js, Express, MongoDB, React, an
 - Data-driven timetable generation by semester and section
 - Exact weekly-period scheduling from each subject's `weeklySlots`
 - Continuous 2- or 3-period laboratory blocks
+- B1/B2/B3 batch scheduling and parallel laboratory rotations
+- Fixed multi-period activity and project blocks
+- Configurable teacher availability and lower daily limits
 - Teacher conflict checks across saved section timetables
 - Classroom and laboratory-room conflict checks
+- Retry generation with alternative valid candidate ordering
 - Constraint warnings when a complete timetable is not possible
 - PDF preview and download for generated timetable
 - Empty-state UI messaging when data is missing
@@ -156,11 +160,22 @@ The backend planner currently enforces:
 - labs remain continuous for their configured duration
 - no classroom or lab-room clashes with saved timetables
 - one consistent professor selected from a subject's `allowedTeachers`
+- different teachers and rooms for simultaneous batch labs
+- configured teacher unavailable periods
+- an optional lower teacher session limit (never above three)
+- optional fixed placements for projects and institutional activities
 
 A continuous lab block counts as one teaching session for the professor's
-daily limit. When all configured periods cannot be placed, the API returns the
-best partial timetable together with specific warnings; it does not invent
-fallback subjects or professors.
+daily limit. Consecutive periods inside one block are allowed; the teacher gap
+rule applies between separate sessions. When all configured periods cannot be
+placed, the API returns `success: false` and specific warnings. A failed retry
+does not overwrite the section's previously saved timetable.
+
+Every generation request loads the other saved section timetables from MongoDB.
+Their teacher, classroom, and laboratory occupancy is treated as unavailable.
+Pressing Generate again reuses the same master data and explores a different
+ordering among equally valid candidates; no teacher, subject, or section data
+needs to be re-entered.
 
 ## Sample Payloads
 
@@ -179,7 +194,11 @@ fallback subjects or professors.
 ```json
 {
   "name": "Prof. Kumar",
-  "teacherId": "T-102"
+  "teacherId": "T-102",
+  "maxSessionsPerDay": 3,
+  "unavailableSlots": [
+    { "day": 0, "slot": 0 }
+  ]
 }
 ```
 
@@ -195,6 +214,66 @@ fallback subjects or professors.
   "allowedTeachers": ["<teacher_id>"]
 }
 ```
+
+### Create Parallel Batch Labs
+
+Subjects sharing a `parallelGroup` may run at the same time when their batches,
+teachers, and rooms are different. `weeklySlots` is the weekly period count for
+each configured batch.
+
+```json
+{
+  "name": "Machine Learning Lab",
+  "code": "BCSL606",
+  "type": "lab",
+  "weeklySlots": 2,
+  "duration": 2,
+  "sectionId": "<section_id>",
+  "parallelGroup": "sixth-sem-lab-rotation",
+  "batchAssignments": [
+    {
+      "batch": "B1",
+      "allowedTeachers": ["<teacher_1_id>"],
+      "roomOptions": ["Lab 3"]
+    },
+    {
+      "batch": "B2",
+      "allowedTeachers": ["<teacher_2_id>"],
+      "roomOptions": ["Lab 3"]
+    },
+    {
+      "batch": "B3",
+      "allowedTeachers": ["<teacher_3_id>"],
+      "roomOptions": ["Lab 3"]
+    }
+  ]
+}
+```
+
+Create the paired lab as another subject with the same `parallelGroup`, its own
+batch teachers, and different room options. The saved timetable stores every
+parallel session separately for future conflict detection while also returning
+a combined cell compatible with the existing timetable UI.
+
+### Create a Fixed Project Block
+
+```json
+{
+  "name": "Project Phase I",
+  "code": "BCS685",
+  "type": "project",
+  "weeklySlots": 2,
+  "sessionDuration": 2,
+  "sectionId": "<section_id>",
+  "allowedTeachers": ["<teacher_id>"],
+  "fixedSlots": [
+    { "day": 2, "startSlot": 6 }
+  ]
+}
+```
+
+Days are zero-based (`0` is Monday). Teaching grid indexes are
+`0, 1, 3, 4, 6, 7, 8`; indexes `2` and `5` are break and lunch.
 
 ### Generate Timetable
 
