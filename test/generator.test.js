@@ -9,6 +9,7 @@ const {
   generateTimetable,
   getEntries,
   normalizeGrid,
+  validateEditedTimetable,
 } = require("../server/services/generator");
 
 function teacher(id, name = id) {
@@ -343,6 +344,57 @@ test("normalizes old wrapped grids and the model now stores a true 6 x 9 grid", 
   assert.equal(document.grid.length, 6);
   assert.equal(document.grid[0].length, 9);
   assert.equal(Array.isArray(document.grid[0][0]), false);
+});
+
+test("validates altered grids and rejects edits that create student gaps", () => {
+  const teachers = [teacher("edit-t1"), teacher("edit-t2")];
+  const subjects = [
+    subject("edit-a", "Editable A", 1, ["edit-t1"]),
+    subject("edit-b", "Editable B", 1, ["edit-t2"]),
+  ];
+  const generated = generateTimetable(subjects, teachers, [], {
+    classroom: "C-EDIT",
+  });
+
+  assert.equal(generated.success, true, generated.warnings.join("\n"));
+  const valid = validateEditedTimetable(
+    generated.timetable,
+    subjects,
+    teachers,
+    [],
+    { classroom: "C-EDIT" }
+  );
+  assert.equal(valid.success, true, valid.errors.join("\n"));
+
+  const invalidGrid = Array.from({ length: 6 }, () => Array(9).fill(null));
+  invalidGrid[0][0] = {
+    subjectId: "edit-a",
+    subjectName: "Editable A",
+    teacherId: "edit-t1",
+    teacherName: "edit-t1",
+    room: "C-EDIT",
+    type: "theory",
+    duration: 1,
+  };
+  invalidGrid[0][3] = {
+    subjectId: "edit-b",
+    subjectName: "Editable B",
+    teacherId: "edit-t2",
+    teacherName: "edit-t2",
+    room: "C-EDIT",
+    type: "theory",
+    duration: 1,
+  };
+
+  const invalid = validateEditedTimetable(
+    invalidGrid,
+    subjects,
+    teachers,
+    [],
+    { classroom: "C-EDIT" }
+  );
+  assert.equal(invalid.success, false);
+  assert.match(invalid.errors.join(" "), /empty period between classes/i);
 });
 
 test("Mongoose sessionDuration defaults do not turn ordinary subjects into zero-length blocks", () => {

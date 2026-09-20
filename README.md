@@ -20,6 +20,7 @@ A full-stack timetable generator built with Node.js, Express, MongoDB, React, an
 - Round-robin subject placement with no internal student timetable gaps
 - Constraint warnings when a complete timetable is not possible
 - Explicit save-to-database confirmation after generation
+- Drag-and-drop timetable editing with validated database saves
 - PDF preview for saved or unsaved timetables; download only after saving
 - Empty-state UI messaging when data is missing
 - Mobile-first responsive frontend layout
@@ -147,6 +148,8 @@ For a deployed frontend, set `VITE_API_URL` to the public backend API URL.
 
 - `POST /api/timetable/generate` (preview only; does not write to MongoDB)
 - `POST /api/timetable/save` (revalidates and saves the selected preview)
+- `POST /api/timetable/validate-edited` (checks a proposed drag without saving)
+- `POST /api/timetable/save-edited` (validates and saves a drag-and-drop edit)
 - `GET /api/timetable`
 - `GET /api/timetable/:sectionId`
 - `GET /api/timetable/teacher/:teacherId`
@@ -187,6 +190,15 @@ ordering among equally valid candidates; no teacher, subject, or section data
 needs to be re-entered. Generation returns an unsaved preview. MongoDB is only
 updated after the user clicks **Save Timetable to DB**. Preview is available in
 both states, while PDF download is enabled only for a saved timetable.
+
+Generated and previously saved timetables can be edited by dragging a class to
+an empty period or onto another class of the same duration to swap them. Lab and
+project sessions move as complete continuous blocks. An edit marks the current
+view as unsaved and enables **Save Changes to DB**. The server checks the full
+edited grid against subject counts, fixed placements, teacher availability,
+teacher and room clashes, daily limits, continuity, and student gaps before it
+is shown. Invalid drops are blocked and the original timetable remains
+unchanged. The same validation runs again before MongoDB is updated.
 
 ## Sample Payloads
 

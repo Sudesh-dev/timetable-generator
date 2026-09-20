@@ -1079,6 +1079,372 @@ function finalizeGrid(grid) {
   );
 }
 
+function validateEditedTimetable(
+  grid,
+  subjects,
+  teachers,
+  roomPool = [],
+  options = {}
+) {
+  const errors = [];
+  const addError = (message) => errors.push(message);
+  const exactGrid =
+    Array.isArray(grid) &&
+    grid.length === DAYS &&
+    grid.every((day) => Array.isArray(day) && day.length === SLOTS);
+
+  if (!exactGrid) {
+    return {
+      success: false,
+      errors: ["The edited timetable must contain exactly 6 days and 9 slots per day."],
+    };
+  }
+
+  const safeSubjects = Array.isArray(subjects) ? subjects : [];
+  const safeTeachers = Array.isArray(teachers) ? teachers : [];
+  const safeRoomPool = Array.isArray(roomPool) ? roomPool : [];
+  const existingTimetables = Array.isArray(options.existingTimetables)
+    ? options.existingTimetables
+    : [];
+  const classroom = normalizeRoomName(options.classroom, "Classroom");
+  const configurationWarnings = [];
+  const requirements = buildRequirements(
+    safeSubjects,
+    safeTeachers,
+    configurationWarnings
+  );
+  configurationWarnings.forEach(addError);
+
+  const requirementMap = new Map();
+  requirements.forEach((requirement) => {
+    const key = `${requirement.subjectId}:${requirement.batch || "section"}`;
+    if (requirementMap.has(key)) {
+      addError(
+        `${requirement.subjectName}${requirement.batch ? ` (${requirement.batch})` : ""} has duplicate scheduling requirements.`
+      );
+    }
+    requirementMap.set(key, requirement);
+  });
+
+  const knownTeachers = existingTeacherIds(safeTeachers);
+  const policies = teacherPolicyMap(safeTeachers);
+  const external = createExternalState(existingTimetables);
+  const periodCounts = new Map();
+  const sessions = new Map();
+  const teachersByRequirement = new Map();
+  const localTeacherSlots = new Map();
+  const localTeacherSessions = new Map();
+  const localRoomSlots = new Map();
+
+  function ensureTeacherValidationState(teacherId) {
+    if (localTeacherSlots.has(teacherId)) return;
+    localTeacherSlots.set(
+      teacherId,
+      Array.from({ length: DAYS }, () => Array(SLOTS).fill(null))
+    );
+    localTeacherSessions.set(
+      teacherId,
+      Array.from({ length: DAYS }, () => new Set())
+    );
+  }
+
+  function ensureRoomValidationState(room) {
+    const key = roomKey(room);
+    if (!key || localRoomSlots.has(key)) return key;
+    localRoomSlots.set(
+      key,
+      Array.from({ length: DAYS }, () => Array(SLOTS).fill(null))
+    );
+    return key;
+  }
+
+  for (let day = 0; day < DAYS; day++) {
+    for (const blockedSlot of [2, 5]) {
+      if (getEntries(grid[day][blockedSlot]).length > 0) {
+        addError(`Day ${day + 1} contains a class during break or lunch.`);
+      }
+    }
+
+    for (const slot of TEACHING_SLOTS) {
+      const entries = getEntries(grid[day][slot]);
+      if (entries.length === 0) continue;
+
+      if (entries.length > 1) {
+        const parallelGroup = String(entries[0]?.parallelGroup || "");
+        const batches = entries.map((entry) => String(entry?.batch || ""));
+        const teacherIds = entries.map((entry) => getId(entry?.teacherId));
+        const rooms = entries.map((entry) => roomKey(entry?.room));
+        const compatible =
+          Boolean(parallelGroup) &&
+          entries.every(
+            (entry) =>
+              String(entry?.parallelGroup || "") === parallelGroup &&
+              String(entry?.batch || "")
+          ) &&
+          new Set(batches).size === batches.length &&
+          new Set(teacherIds).size === teacherIds.length &&
+          new Set(rooms).size === rooms.length;
+
+        if (!compatible) {
+          addError(
+            `Day ${day + 1}, slot ${slot + 1} contains incompatible parallel classes.`
+          );
+        }
+      }
+
+      entries.forEach((entry) => {
+        if (!entry || typeof entry !== "object") {
+          addError(`Day ${day + 1}, slot ${slot + 1} contains invalid class data.`);
+          return;
+        }
+
+        const subjectId = getId(entry.subjectId);
+        const batch = String(entry.batch || "").trim();
+        const requirementKey = `${subjectId}:${batch || "section"}`;
+        const requirement = requirementMap.get(requirementKey);
+
+        if (!requirement) {
+          addError(
+            `Day ${day + 1}, slot ${slot + 1} contains an unknown subject or batch.`
+          );
+          return;
+        }
+
+        const teacherId = getId(entry.teacherId);
+        if (
+          !teacherId ||
+          !knownTeachers.has(teacherId) ||
+          !requirement.allowedTeachers.includes(teacherId)
+        ) {
+          addError(
+            `${requirement.subjectName}${batch ? ` (${batch})` : ""} has an invalid assigned teacher.`
+          );
+          return;
+        }
+
+        const room = normalizeRoomName(entry.room);
+        const allowedRooms = getCandidateRooms(
+          requirement,
+          classroom,
+          safeRoomPool
+        ).map(roomKey);
+        if (!room || !allowedRooms.includes(roomKey(room))) {
+          addError(
+            `${requirement.subjectName}${batch ? ` (${batch})` : ""} is assigned to an invalid room.`
+          );
+        }
+
+        const blockId = String(entry.blockId || "").trim();
+        if (requirement.duration > 1 && !blockId) {
+          addError(
+            `${requirement.subjectName}${batch ? ` (${batch})` : ""} must remain a continuous ${requirement.duration}-period block.`
+          );
+        }
+
+        const sessionKey =
+          requirement.duration > 1 && blockId
+            ? `${requirementKey}:${blockId}`
+            : `${requirementKey}:${day}:${slot}`;
+        const session = sessions.get(sessionKey) || {
+          key: sessionKey,
+          requirement,
+          positions: [],
+          teachers: new Set(),
+          rooms: new Set(),
+        };
+        session.positions.push({ day, slot });
+        session.teachers.add(teacherId);
+        session.rooms.add(roomKey(room));
+        sessions.set(sessionKey, session);
+
+        periodCounts.set(
+          requirementKey,
+          (periodCounts.get(requirementKey) || 0) + 1
+        );
+        if (!teachersByRequirement.has(requirementKey)) {
+          teachersByRequirement.set(requirementKey, new Set());
+        }
+        teachersByRequirement.get(requirementKey).add(teacherId);
+
+        ensureTeacherValidationState(teacherId);
+        const teacherSlots = localTeacherSlots.get(teacherId);
+        if (teacherSlots[day][slot]) {
+          addError(
+            `${requirement.subjectName} double-books a teacher on day ${day + 1}, slot ${slot + 1}.`
+          );
+        }
+        if (external.teacherSlots.get(teacherId)?.[day]?.[slot]) {
+          addError(
+            `${requirement.subjectName} clashes with the teacher's saved timetable on day ${day + 1}, slot ${slot + 1}.`
+          );
+        }
+        if (policies.get(teacherId)?.unavailable.has(`${day}:${slot}`)) {
+          addError(
+            `${requirement.subjectName} uses a period when the assigned teacher is unavailable.`
+          );
+        }
+        teacherSlots[day][slot] = sessionKey;
+        localTeacherSessions.get(teacherId)[day].add(sessionKey);
+
+        const roomId = ensureRoomValidationState(room);
+        if (roomId) {
+          if (localRoomSlots.get(roomId)[day][slot]) {
+            addError(
+              `${room} is assigned to more than one class on day ${day + 1}, slot ${slot + 1}.`
+            );
+          }
+          if (external.roomSlots.get(roomId)?.[day]?.[slot]) {
+            addError(
+              `${room} clashes with another saved timetable on day ${day + 1}, slot ${slot + 1}.`
+            );
+          }
+          localRoomSlots.get(roomId)[day][slot] = sessionKey;
+        }
+      });
+    }
+
+    const occupied = TEACHING_SLOTS.map((slot) => grid[day][slot] !== null);
+    const first = occupied.indexOf(true);
+    const last = occupied.lastIndexOf(true);
+    if (first >= 0 && occupied.slice(first, last + 1).includes(false)) {
+      addError(`Day ${day + 1} contains an empty period between classes.`);
+    }
+  }
+
+  const subjectDaySessions = new Map();
+  const parallelBatchDaySessions = new Map();
+
+  sessions.forEach((session) => {
+    const { requirement, positions } = session;
+    const requirementKey = `${requirement.subjectId}:${requirement.batch || "section"}`;
+    const days = [...new Set(positions.map((position) => position.day))];
+    const slots = positions
+      .map((position) => position.slot)
+      .sort((first, second) => first - second);
+
+    if (
+      days.length !== 1 ||
+      slots.length !== requirement.duration ||
+      !getContinuousStarts(requirement.duration).includes(slots[0]) ||
+      slots.some((slot, index) => slot !== slots[0] + index)
+    ) {
+      addError(
+        `${requirement.subjectName}${requirement.batch ? ` (${requirement.batch})` : ""} must remain a continuous ${requirement.duration}-period session.`
+      );
+      return;
+    }
+
+    if (session.teachers.size !== 1 || session.rooms.size !== 1) {
+      addError(
+        `${requirement.subjectName}${requirement.batch ? ` (${requirement.batch})` : ""} must use one teacher and one room throughout its block.`
+      );
+    }
+
+    if (
+      requirement.fixedSlots.length > 0 &&
+      !requirement.fixedSlots.some(
+        (fixed) => fixed.day === days[0] && fixed.start === slots[0]
+      )
+    ) {
+      addError(`${requirement.subjectName} was moved away from its fixed slot.`);
+    }
+
+    const subjectDayKey = `${requirement.subjectId}:${days[0]}`;
+    if (!subjectDaySessions.has(subjectDayKey)) {
+      subjectDaySessions.set(subjectDayKey, new Set());
+    }
+    subjectDaySessions.get(subjectDayKey).add(session.key);
+
+    if (requirement.parallelGroup && requirement.batch) {
+      const parallelKey = `${requirement.parallelGroup}:${requirement.batch}:${days[0]}`;
+      if (!parallelBatchDaySessions.has(parallelKey)) {
+        parallelBatchDaySessions.set(parallelKey, new Set());
+      }
+      parallelBatchDaySessions.get(parallelKey).add(session.key);
+    }
+
+    if (!periodCounts.has(requirementKey)) periodCounts.set(requirementKey, 0);
+  });
+
+  requirements.forEach((requirement) => {
+    const key = `${requirement.subjectId}:${requirement.batch || "section"}`;
+    const expectedPeriods = requirement.sessions * requirement.duration;
+    const actualPeriods = periodCounts.get(key) || 0;
+    if (actualPeriods !== expectedPeriods) {
+      addError(
+        `${requirement.subjectName}${requirement.batch ? ` (${requirement.batch})` : ""} requires ${expectedPeriods} weekly periods but the edited timetable contains ${actualPeriods}.`
+      );
+    }
+
+    if ((teachersByRequirement.get(key)?.size || 0) > 1) {
+      addError(
+        `${requirement.subjectName}${requirement.batch ? ` (${requirement.batch})` : ""} must keep one assigned teacher for the week.`
+      );
+    }
+  });
+
+  subjectDaySessions.forEach((daySessions, key) => {
+    if (daySessions.size > 1) {
+      const subjectId = key.split(":")[0];
+      const requirement = requirements.find(
+        (item) => item.subjectId === subjectId
+      );
+      addError(
+        `${requirement?.subjectName || "A subject"} appears more than once on the same day.`
+      );
+    }
+  });
+
+  parallelBatchDaySessions.forEach((daySessions) => {
+    if (daySessions.size > 1) {
+      addError("A lab batch has more than one rotation from the same group in a day.");
+    }
+  });
+
+  localTeacherSlots.forEach((slotsByDay, teacherId) => {
+    const policy = policies.get(teacherId) || {
+      maxSessionsPerDay: MAX_TEACHER_SESSIONS_PER_DAY,
+    };
+
+    for (let day = 0; day < DAYS; day++) {
+      const localSessions = localTeacherSessions.get(teacherId)[day];
+      const externalSessions = external.teacherDailySessions.get(teacherId)?.[day];
+      const totalSessions = localSessions.size + (externalSessions?.size || 0);
+      if (totalSessions > policy.maxSessionsPerDay) {
+        addError(
+          `A teacher exceeds the ${policy.maxSessionsPerDay}-session daily limit on day ${day + 1}.`
+        );
+      }
+
+      for (let position = 1; position < TEACHING_SLOTS.length; position++) {
+        const previousSlot = TEACHING_SLOTS[position - 1];
+        const currentSlot = TEACHING_SLOTS[position];
+        const previousSession =
+          slotsByDay[day][previousSlot] ||
+          external.teacherSlots.get(teacherId)?.[day]?.[previousSlot];
+        const currentSession =
+          slotsByDay[day][currentSlot] ||
+          external.teacherSlots.get(teacherId)?.[day]?.[currentSlot];
+
+        if (
+          previousSession &&
+          currentSession &&
+          previousSession !== currentSession
+        ) {
+          addError(
+            `A teacher has consecutive separate classes on day ${day + 1}.`
+          );
+        }
+      }
+    }
+  });
+
+  return {
+    success: errors.length === 0,
+    errors: [...new Set(errors)],
+  };
+}
+
 function generateTimetable(subjects, teachers, roomPool = [], options = {}) {
   const warnings = [];
   const safeSubjects = Array.isArray(subjects) ? subjects : [];
@@ -1162,5 +1528,6 @@ module.exports = {
   createEmptyGrid,
   getEntries,
   normalizeGrid,
+  validateEditedTimetable,
   generateTimetable,
 };

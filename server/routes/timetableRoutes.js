@@ -5,6 +5,8 @@ const timetableController = require("../controllers/timetableController");
 // ✅ specific routes FIRST
 router.post("/generate", timetableController.generatePreview);
 router.post("/save", timetableController.saveGenerated);
+router.post("/validate-edited", timetableController.validateEdited);
+router.post("/save-edited", timetableController.saveEdited);
 router.get("/teacher/:teacherId", timetableController.getByTeacher);
 router.get("/", timetableController.getAll);
 router.put("/slot", timetableController.updateSlot);

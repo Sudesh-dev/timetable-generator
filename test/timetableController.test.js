@@ -235,3 +235,121 @@ test("save rejects a modified or stale preview without writing", async () => {
     stubs.restore();
   }
 });
+
+test("an altered timetable is validated and saved with edited status", async () => {
+  const stubs = installGenerationStubs({
+    subjects: [
+      {
+        _id: "editable-subject",
+        name: "Editable Subject",
+        code: "EDIT",
+        type: "theory",
+        weeklySlots: 1,
+        allowedTeachers: ["editable-teacher"],
+      },
+    ],
+    teachers: [{ _id: "editable-teacher", name: "Editable Teacher" }],
+  });
+
+  try {
+    const grid = Array.from({ length: 6 }, () => Array(9).fill(null));
+    grid[2][3] = {
+      subjectId: "editable-subject",
+      subjectName: "Editable Subject",
+      teacherId: "editable-teacher",
+      teacherName: "Editable Teacher",
+      room: "CSLH-001",
+      type: "theory",
+      blockId: null,
+      duration: 1,
+      batch: null,
+      parallelGroup: null,
+    };
+    const response = responseRecorder();
+
+    await controller.saveEdited(
+      {
+        body: {
+          sectionId: "section-1",
+          roomPool: [],
+          grid,
+        },
+      },
+      response
+    );
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.body.success, true);
+    assert.equal(response.body.saved, true);
+    assert.equal(stubs.updateCalls, 1);
+    assert.equal(stubs.lastUpdate.update.status, "edited");
+    assert.deepEqual(stubs.lastUpdate.update.grid, grid);
+  } finally {
+    stubs.restore();
+  }
+});
+
+test("drop validation blocks a teacher clash without writing to MongoDB", async () => {
+  const stubs = installGenerationStubs({
+    subjects: [
+      {
+        _id: "clash-a",
+        name: "Clash A",
+        code: "CLA",
+        type: "theory",
+        weeklySlots: 1,
+        allowedTeachers: ["shared-teacher"],
+      },
+      {
+        _id: "clash-b",
+        name: "Clash B",
+        code: "CLB",
+        type: "theory",
+        weeklySlots: 1,
+        allowedTeachers: ["shared-teacher"],
+      },
+    ],
+    teachers: [{ _id: "shared-teacher", name: "Shared Teacher" }],
+  });
+
+  try {
+    const grid = Array.from({ length: 6 }, () => Array(9).fill(null));
+    grid[0][0] = {
+      subjectId: "clash-a",
+      subjectName: "Clash A",
+      teacherId: "shared-teacher",
+      teacherName: "Shared Teacher",
+      room: "CSLH-001",
+      type: "theory",
+      duration: 1,
+    };
+    grid[0][1] = {
+      subjectId: "clash-b",
+      subjectName: "Clash B",
+      teacherId: "shared-teacher",
+      teacherName: "Shared Teacher",
+      room: "CSLH-001",
+      type: "theory",
+      duration: 1,
+    };
+    const response = responseRecorder();
+
+    await controller.validateEdited(
+      {
+        body: {
+          sectionId: "section-1",
+          roomPool: [],
+          grid,
+        },
+      },
+      response
+    );
+
+    assert.equal(response.statusCode, 422);
+    assert.equal(response.body.success, false);
+    assert.match(response.body.error, /double-books|consecutive/i);
+    assert.equal(stubs.updateCalls, 0);
+  } finally {
+    stubs.restore();
+  }
+});

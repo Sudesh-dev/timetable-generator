@@ -27,7 +27,9 @@ export default function GeneratePage() {
   const [timetable, setTimetable] = useState(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [validatingMove, setValidatingMove] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [variationSeed, setVariationSeed] = useState(null);
 
   const [previewImg, setPreviewImg] = useState(null);
@@ -67,6 +69,7 @@ export default function GeneratePage() {
     setSectionId("");
     setTimetable(null);
     setIsSaved(false);
+    setHasUnsavedChanges(false);
     setVariationSeed(null);
     setShowPreview(false);
   };
@@ -83,6 +86,8 @@ export default function GeneratePage() {
         if (controller.signal.aborted) return;
         setTimetable(normalizeTimetable(res.data));
         setIsSaved(true);
+        setHasUnsavedChanges(false);
+        setVariationSeed(null);
       })
       .catch((err) => {
         if (controller.signal.aborted || err.code === "ERR_CANCELED") return;
@@ -123,6 +128,7 @@ export default function GeneratePage() {
       setTimetable(normalizeTimetable(res.data.timetable));
       setVariationSeed(res.data.variationSeed);
       setIsSaved(false);
+      setHasUnsavedChanges(false);
       setShowPreview(false);
 
     } catch (err) {
@@ -134,27 +140,62 @@ export default function GeneratePage() {
 
   // SAVE THE CURRENT PREVIEW ONLY AFTER EXPLICIT CONFIRMATION
   const saveTimetable = async () => {
-    if (!timetable?.grid || variationSeed === null) {
-      alert("Generate a timetable preview before saving");
+    if (!timetable?.grid) {
+      alert("Generate or load a timetable before saving");
       return;
     }
 
     try {
       setSaving(true);
-      const res = await API.post("/timetable/save", {
+      const endpoint = hasUnsavedChanges
+        ? "/timetable/save-edited"
+        : "/timetable/save";
+      const payload = {
         sectionId,
         roomPool: ROOM_POOL,
-        variationSeed,
-        grid: timetable.grid
-      });
+        grid: timetable.grid,
+      };
+
+      if (!hasUnsavedChanges) payload.variationSeed = variationSeed;
+
+      const res = await API.post(endpoint, payload);
 
       setTimetable(normalizeTimetable(res.data.timetable));
       setIsSaved(true);
+      setHasUnsavedChanges(false);
+      setVariationSeed(null);
       alert("Timetable saved to the database");
     } catch (err) {
       alert(err.response?.data?.error || "Failed to save timetable");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const updateGrid = async (grid) => {
+    try {
+      setValidatingMove(true);
+      await API.post("/timetable/validate-edited", {
+        sectionId,
+        roomPool: ROOM_POOL,
+        grid,
+      });
+
+      setTimetable((current) => ({ ...current, grid }));
+      setIsSaved(false);
+      setHasUnsavedChanges(true);
+      setShowPreview(false);
+      return true;
+    } catch (err) {
+      alert(
+        `Move blocked: ${
+          err.response?.data?.error ||
+          "this slot would break a timetable constraint"
+        }`
+      );
+      return false;
+    } finally {
+      setValidatingMove(false);
     }
   };
 
@@ -233,6 +274,7 @@ export default function GeneratePage() {
         <div className="form-grid">
           <select
             value={semester}
+            disabled={validatingMove}
             onChange={(e) => {
               setSemester(e.target.value);
               clearTimetable();
@@ -251,10 +293,11 @@ export default function GeneratePage() {
               setSectionId(e.target.value);
               setTimetable(null);
               setIsSaved(false);
+              setHasUnsavedChanges(false);
               setVariationSeed(null);
               setShowPreview(false);
             }}
-            disabled={!semester}
+            disabled={!semester || validatingMove}
           >
             <option value="">Select Section</option>
             {sections
@@ -264,7 +307,16 @@ export default function GeneratePage() {
               ))}
           </select>
 
-          <button disabled={!semester || !sectionId || subjects.length === 0 || loading} onClick={generate}>
+          <button
+            disabled={
+              !semester ||
+              !sectionId ||
+              subjects.length === 0 ||
+              loading ||
+              validatingMove
+            }
+            onClick={generate}
+          >
             {loading ? "Generating..." : "Generate"}
           </button>
         </div>
@@ -307,20 +359,43 @@ export default function GeneratePage() {
           <div id="timetable-area">
 
             <div className="card">
-              <TimetableGrid data={timetable.grid} />
+              <TimetableGrid
+                data={timetable.grid}
+                editable={!loading && !saving && !validatingMove}
+                onGridChange={updateGrid}
+                onInvalidMove={(message) => alert(message)}
+              />
             </div>
 
           </div>
 
           <div className="actions-center">
             <div className="empty-state">
-              {isSaved
-                ? "Saved in the database — preview and download are available."
-                : "Preview only — save this timetable before downloading."}
+              {validatingMove
+                ? "Checking the proposed slot for teacher, room, and timetable clashes..."
+                : isSaved
+                  ? "Saved in the database — preview and download are available."
+                  : hasUnsavedChanges
+                    ? "Unsaved changes — save the altered timetable before downloading."
+                    : "Preview only — drag classes to edit, then save before downloading."}
             </div>
 
-            <button disabled={isSaved || saving || loading} onClick={saveTimetable}>
-              {isSaved ? "✓ Saved to DB" : saving ? "Saving..." : "💾 Save Timetable to DB"}
+            <button
+              disabled={
+                (isSaved && !hasUnsavedChanges) ||
+                saving ||
+                loading ||
+                validatingMove
+              }
+              onClick={saveTimetable}
+            >
+              {saving
+                ? "Saving..."
+                : isSaved && !hasUnsavedChanges
+                  ? "✓ Saved to DB"
+                  : hasUnsavedChanges
+                    ? "💾 Save Changes to DB"
+                    : "💾 Save Timetable to DB"}
             </button>
 
             <button onClick={previewPDF}>
