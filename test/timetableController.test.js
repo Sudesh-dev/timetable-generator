@@ -22,7 +22,7 @@ function responseRecorder() {
   };
 }
 
-test("failed generation reports warnings and preserves the saved timetable", async () => {
+function installGenerationStubs({ subjects, teachers, existingTimetables = [] }) {
   const originals = {
     findSection: Section.findById,
     findSubjects: Subject.find,
@@ -31,6 +31,7 @@ test("failed generation reports warnings and preserves the saved timetable", asy
     updateTimetable: Timetable.findOneAndUpdate,
   };
   let updateCalls = 0;
+  let lastUpdate = null;
 
   Section.findById = async () => ({
     _id: "section-1",
@@ -38,17 +39,8 @@ test("failed generation reports warnings and preserves the saved timetable", asy
     classroom: "CSLH-001",
     departmentId: null,
   });
-  Subject.find = async () => [
-    {
-      _id: "orphan-subject",
-      name: "Unassigned Subject",
-      code: "ORPHAN",
-      type: "theory",
-      weeklySlots: 4,
-      allowedTeachers: ["missing-teacher"],
-    },
-  ];
-  Teacher.find = async () => [];
+  Subject.find = async () => subjects;
+  Teacher.find = async () => teachers;
   Timetable.find = () => ({
     select() {
       return this;
@@ -57,20 +49,54 @@ test("failed generation reports warnings and preserves the saved timetable", asy
       return this;
     },
     async lean() {
-      return [
-        {
-          _id: "existing-timetable",
-          sectionId: { _id: "section-2", classroom: "CSLH-002" },
-          classroom: "CSLH-002",
-          grid: [],
-        },
-      ];
+      return existingTimetables;
     },
   });
-  Timetable.findOneAndUpdate = async () => {
+  Timetable.findOneAndUpdate = async (filter, update) => {
     updateCalls++;
-    return null;
+    lastUpdate = { filter, update };
+    return { _id: "saved-timetable", ...update };
   };
+
+  return {
+    get updateCalls() {
+      return updateCalls;
+    },
+    get lastUpdate() {
+      return lastUpdate;
+    },
+    restore() {
+      Section.findById = originals.findSection;
+      Subject.find = originals.findSubjects;
+      Teacher.find = originals.findTeachers;
+      Timetable.find = originals.findTimetables;
+      Timetable.findOneAndUpdate = originals.updateTimetable;
+    },
+  };
+}
+
+test("failed preview generation reports warnings without writing to MongoDB", async () => {
+  const stubs = installGenerationStubs({
+    subjects: [
+      {
+        _id: "orphan-subject",
+        name: "Unassigned Subject",
+        code: "ORPHAN",
+        type: "theory",
+        weeklySlots: 4,
+        allowedTeachers: ["missing-teacher"],
+      },
+    ],
+    teachers: [],
+    existingTimetables: [
+      {
+        _id: "existing-timetable",
+        sectionId: { _id: "section-2", classroom: "CSLH-002" },
+        classroom: "CSLH-002",
+        grid: [],
+      },
+    ],
+  });
 
   try {
     const req = {
@@ -81,18 +107,131 @@ test("failed generation reports warnings and preserves the saved timetable", asy
     };
     const res = responseRecorder();
 
-    await controller.generateAndSave(req, res);
+    await controller.generatePreview(req, res);
 
     assert.equal(res.statusCode, 422);
     assert.equal(res.body.success, false);
+    assert.equal(res.body.saved, false);
     assert.equal(res.body.checkedTimetables, 1);
     assert.match(res.body.warnings.join(" "), /no valid assigned teacher/i);
-    assert.equal(updateCalls, 0);
+    assert.equal(stubs.updateCalls, 0);
   } finally {
-    Section.findById = originals.findSection;
-    Subject.find = originals.findSubjects;
-    Teacher.find = originals.findTeachers;
-    Timetable.find = originals.findTimetables;
-    Timetable.findOneAndUpdate = originals.updateTimetable;
+    stubs.restore();
+  }
+});
+
+test("generation stays unsaved until the explicit save endpoint is called", async () => {
+  const stubs = installGenerationStubs({
+    subjects: [
+      {
+        _id: "algorithms",
+        name: "Algorithms",
+        code: "ALG",
+        type: "theory",
+        weeklySlots: 1,
+        allowedTeachers: ["teacher-1"],
+      },
+    ],
+    teachers: [{ _id: "teacher-1", name: "Teacher One" }],
+  });
+
+  try {
+    const roomPool = [{ name: "Lab 1" }];
+    const previewResponse = responseRecorder();
+    await controller.generatePreview(
+      {
+        body: {
+          sectionId: "section-1",
+          roomPool,
+          variationSeed: 12345,
+        },
+      },
+      previewResponse
+    );
+
+    assert.equal(previewResponse.statusCode, 200);
+    assert.equal(previewResponse.body.success, true);
+    assert.equal(previewResponse.body.saved, false);
+    assert.equal(previewResponse.body.timetable.status, "preview");
+    assert.equal(previewResponse.body.timetable._id, undefined);
+    assert.equal(stubs.updateCalls, 0);
+
+    const saveResponse = responseRecorder();
+    await controller.saveGenerated(
+      {
+        body: {
+          sectionId: "section-1",
+          roomPool,
+          variationSeed: previewResponse.body.variationSeed,
+          grid: previewResponse.body.timetable.grid,
+        },
+      },
+      saveResponse
+    );
+
+    assert.equal(saveResponse.statusCode, 200);
+    assert.equal(saveResponse.body.success, true);
+    assert.equal(saveResponse.body.saved, true);
+    assert.equal(saveResponse.body.timetable._id, "saved-timetable");
+    assert.equal(stubs.updateCalls, 1);
+    assert.equal(stubs.lastUpdate.update.status, "generated");
+  } finally {
+    stubs.restore();
+  }
+});
+
+test("save rejects a modified or stale preview without writing", async () => {
+  const stubs = installGenerationStubs({
+    subjects: [
+      {
+        _id: "databases",
+        name: "Database Systems",
+        code: "DBS",
+        type: "theory",
+        weeklySlots: 1,
+        allowedTeachers: ["teacher-2"],
+      },
+    ],
+    teachers: [{ _id: "teacher-2", name: "Teacher Two" }],
+  });
+
+  try {
+    const previewResponse = responseRecorder();
+    await controller.generatePreview(
+      {
+        body: {
+          sectionId: "section-1",
+          roomPool: [],
+          variationSeed: 67890,
+        },
+      },
+      previewResponse
+    );
+
+    const changedGrid = structuredClone(previewResponse.body.timetable.grid);
+    const occupiedCell = changedGrid
+      .flat()
+      .find((cell) => cell && cell.subjectId === "databases");
+    occupiedCell.teacherId = "different-teacher";
+
+    const saveResponse = responseRecorder();
+    await controller.saveGenerated(
+      {
+        body: {
+          sectionId: "section-1",
+          roomPool: [],
+          variationSeed: previewResponse.body.variationSeed,
+          grid: changedGrid,
+        },
+      },
+      saveResponse
+    );
+
+    assert.equal(saveResponse.statusCode, 409);
+    assert.equal(saveResponse.body.saved, false);
+    assert.equal(saveResponse.body.regenerateRequired, true);
+    assert.equal(stubs.updateCalls, 0);
+  } finally {
+    stubs.restore();
   }
 });

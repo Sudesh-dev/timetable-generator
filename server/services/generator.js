@@ -286,11 +286,50 @@ function buildRequirements(subjects, teachers, warnings) {
     });
   });
 
+  const parallelGroups = new Map();
+  requirements.forEach((requirement) => {
+    if (!requirement.parallelGroup || !requirement.batch) return;
+    if (!parallelGroups.has(requirement.parallelGroup)) {
+      parallelGroups.set(requirement.parallelGroup, []);
+    }
+    parallelGroups.get(requirement.parallelGroup).push(requirement);
+  });
+
+  parallelGroups.forEach((groupRequirements) => {
+    const subjectIds = [
+      ...new Set(
+        groupRequirements
+          .slice()
+          .sort((a, b) => a.subjectOrder - b.subjectOrder)
+          .map((requirement) => requirement.subjectId)
+      ),
+    ];
+    const batches = [
+      ...new Set(
+        groupRequirements
+          .slice()
+          .sort((a, b) => a.batchOrder - b.batchOrder)
+          .map((requirement) => requirement.batch)
+      ),
+    ];
+    const rotationCount = Math.max(subjectIds.length, batches.length);
+
+    groupRequirements.forEach((requirement) => {
+      const subjectIndex = subjectIds.indexOf(requirement.subjectId);
+      const batchIndex = batches.indexOf(requirement.batch);
+      requirement.parallelRotationIndex =
+        (subjectIndex + batchIndex) % rotationCount;
+    });
+  });
+
   // Interleave subjects before returning to the next batch variant. This
   // prevents a subject with B1/B2/B3 requirements from monopolizing the
-  // queue and gives every subject one turn per scheduling round.
+  // queue and gives every subject one turn per scheduling round. Parallel
+  // rotations are placed first because they have the fewest interchangeable
+  // positions and must be packed before ordinary sessions consume them.
   return requirements.sort(
     (a, b) =>
+      Number(!a.parallelGroup) - Number(!b.parallelGroup) ||
       a.batchOrder - b.batchOrder ||
       a.subjectOrder - b.subjectOrder ||
       a.requirementId.localeCompare(b.requirementId)
@@ -386,6 +425,7 @@ function createPlanningState(existingTimetables, teachers, variationSeed = 0) {
     roomSlots: new Map(),
     subjectDays: new Map(),
     parallelBatchDays: new Map(),
+    parallelRotationSlots: new Map(),
     teacherPolicies: teacherPolicyMap(teachers),
     variationSeed: Number(variationSeed) || 0,
     external: createExternalState(existingTimetables),
@@ -442,6 +482,18 @@ function parallelBatchKey(requirement) {
 function parallelBatchAlreadyUsedOnDay(state, requirement, day) {
   const key = parallelBatchKey(requirement);
   return key ? state.parallelBatchDays.get(key)?.has(day) || false : false;
+}
+
+function parallelRotationKey(requirement) {
+  if (
+    !requirement.parallelGroup ||
+    !Number.isInteger(requirement.parallelRotationIndex)
+  ) {
+    return "";
+  }
+
+  const occurrence = requirement.sessions - requirement.remaining;
+  return `${requirement.parallelGroup}:${requirement.parallelRotationIndex}:${occurrence}`;
 }
 
 function teacherSessionCount(state, teacherId, day) {
@@ -628,6 +680,10 @@ function enumerateCandidates(state, requirement, classroom, roomPool) {
     ? [requirement.assignedTeacherId]
     : requirement.allowedTeachers;
   const rooms = getCandidateRooms(requirement, classroom, roomPool);
+  const rotationKey = parallelRotationKey(requirement);
+  const rotationSlot = rotationKey
+    ? state.parallelRotationSlots.get(rotationKey)
+    : null;
   const candidates = [];
 
   for (let day = 0; day < DAYS; day++) {
@@ -636,6 +692,15 @@ function enumerateCandidates(state, requirement, classroom, roomPool) {
     if (parallelBatchAlreadyUsedOnDay(state, requirement, day)) continue;
 
     for (const start of starts) {
+      if (
+        rotationSlot &&
+        (rotationSlot.day !== day ||
+          rotationSlot.start !== start ||
+          rotationSlot.duration !== requirement.duration)
+      ) {
+        continue;
+      }
+
       if (
         requirement.fixedSlots.length > 0 &&
         !requirement.fixedSlots.some(
@@ -808,9 +873,20 @@ function placeCandidate(state, requirement, candidate, teacherNames) {
     }
     state.parallelBatchDays.get(batchKey).add(candidate.day);
   }
+  const rotationKey = parallelRotationKey(requirement);
+  if (rotationKey) {
+    const rotationSlot = state.parallelRotationSlots.get(rotationKey) || {
+      day: candidate.day,
+      start: candidate.start,
+      duration: requirement.duration,
+      count: 0,
+    };
+    rotationSlot.count++;
+    state.parallelRotationSlots.set(rotationKey, rotationSlot);
+  }
   requirement.remaining--;
 
-  return { previousAssignment, sessionKey };
+  return { previousAssignment, sessionKey, rotationKey };
 }
 
 function removeCandidate(state, requirement, candidate, placement) {
@@ -832,6 +908,15 @@ function removeCandidate(state, requirement, candidate, placement) {
   state.subjectDays.get(requirement.subjectId)?.delete(candidate.day);
   const batchKey = parallelBatchKey(requirement);
   if (batchKey) state.parallelBatchDays.get(batchKey)?.delete(candidate.day);
+  if (placement.rotationKey) {
+    const rotationSlot = state.parallelRotationSlots.get(placement.rotationKey);
+    if (rotationSlot) {
+      rotationSlot.count--;
+      if (rotationSlot.count === 0) {
+        state.parallelRotationSlots.delete(placement.rotationKey);
+      }
+    }
+  }
   requirement.remaining++;
   requirement.assignedTeacherId = placement.previousAssignment;
 }

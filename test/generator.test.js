@@ -682,4 +682,28 @@ test("builds a college-style week with fixed activities and three-way lab rotati
     assert.equal(new Set(entries.map((entry) => entry.room)).size, 3);
   });
   assertNoInternalStudentGaps(result.timetable);
+
+  // Retry ordering may move the rotation, but it must never split a complete
+  // three-way B1/B2/B3 lab rotation into extra partial blocks.
+  [4, 7, 11, 24].forEach((variationSeed) => {
+    const retry = generateTimetable(
+      subjects,
+      teacherIds.map((id) => teacher(id)),
+      [],
+      { classroom: "CSLH-201", variationSeed }
+    );
+    const retryBlocks = new Map();
+    retry.timetable.forEach((day) => {
+      TEACHING_SLOTS.forEach((slot) => {
+        const cell = day[slot];
+        if (cell?.type === "parallel-lab") {
+          retryBlocks.set(cell.blockId, cell.parallelSessions);
+        }
+      });
+    });
+
+    assert.equal(retry.success, true, retry.warnings.join("\n"));
+    assert.equal(retryBlocks.size, 3);
+    retryBlocks.forEach((entries) => assert.equal(entries.length, 3));
+  });
 });
