@@ -22,6 +22,9 @@ const timetableSchema = new mongoose.Schema(
       required: true,
     },
     grid: {
+      // One array per day and one value per timetable slot (6 x 9).
+      // The previous three-dimensional declaration wrapped every saved grid
+      // in an unintended extra array.
       type: [[mongoose.Schema.Types.Mixed]],
       default: [],
     },

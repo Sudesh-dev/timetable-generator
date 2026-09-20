@@ -8,7 +8,12 @@ A full-stack timetable generator built with Node.js, Express, MongoDB, React, an
 - Section CRUD (create, list, update, delete)
 - Subject management (create, list, delete)
 - Subject filters by semester and section
-- Timetable generation by semester and section
+- Data-driven timetable generation by semester and section
+- Exact weekly-period scheduling from each subject's `weeklySlots`
+- Continuous 2- or 3-period laboratory blocks
+- Teacher conflict checks across saved section timetables
+- Classroom and laboratory-room conflict checks
+- Constraint warnings when a complete timetable is not possible
 - PDF preview and download for generated timetable
 - Empty-state UI messaging when data is missing
 - Mobile-first responsive frontend layout
@@ -52,7 +57,7 @@ timetable-frontend/
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 20.19+
 - npm
 - MongoDB (local or Atlas)
 
@@ -138,6 +143,25 @@ Frontend points to:
 - `GET /api/timetable/teacher/:teacherId`
 - `PUT /api/timetable/slot`
 
+## Generation Rules
+
+The backend planner currently enforces:
+
+- six working days and seven teaching periods per day
+- break and lunch slots remain unavailable
+- at most one session of the same subject per section per day
+- at most three teaching sessions per professor per day
+- a gap between separate sessions taught by the same professor
+- no professor assigned to two saved sections at the same time
+- labs remain continuous for their configured duration
+- no classroom or lab-room clashes with saved timetables
+- one consistent professor selected from a subject's `allowedTeachers`
+
+A continuous lab block counts as one teaching session for the professor's
+daily limit. When all configured periods cannot be placed, the API returns the
+best partial timetable together with specific warnings; it does not invent
+fallback subjects or professors.
+
 ## Sample Payloads
 
 ### Create Section
@@ -177,7 +201,6 @@ Frontend points to:
 ```json
 {
   "sectionId": "<section_id>",
-  "classroom": "CSLH-001",
   "roomPool": [
     { "name": "Lab 1" },
     { "name": "Lab 2" }
@@ -185,11 +208,16 @@ Frontend points to:
 }
 ```
 
+The classroom saved on the selected section is authoritative during
+generation. This prevents a client from accidentally generating a timetable
+for the wrong classroom.
+
 ## Scripts
 
 ### Root
 
 - `npm run dev` start backend with nodemon
+- `npm test` run backend generator and grid-schema tests
 
 ### Frontend
 

@@ -2,19 +2,16 @@ const Subject = require("../models/Subject");
 const Teacher = require("../models/Teacher");
 const Section = require("../models/Section");
 const Timetable = require("../models/Timetable");
-const { generateTimetable } = require("../services/generator");
-const {
-  getCellEntries,
-  normalizeGrid,
-  withNormalizedGrid,
-} = require("../services/timetableGrid");
+const { generateTimetable, normalizeGrid } = require("../services/generator");
 
 exports.generateAndSave = async (req, res) => {
   try {
-    const { sectionId, classroom, roomPool } = req.body;
+    const { sectionId, roomPool } = req.body;
 
     if (!sectionId) {
-      return res.status(400).json({ error: "sectionId is required" });
+      return res.status(400).json({
+        error: "sectionId is required",
+      });
     }
 
     const section = await Section.findById(sectionId);
@@ -22,14 +19,19 @@ exports.generateAndSave = async (req, res) => {
       return res.status(404).json({ error: "Section not found" });
     }
 
-    const [subjects, teachers, existingTimetables] = await Promise.all([
-      Subject.find({ sectionId }),
+    const subjects = await Subject.find({
+      sectionId,
+    });
+
+    const [teachers, existingTimetables] = await Promise.all([
       Teacher.find(),
-      Timetable.find({ sectionId: { $ne: sectionId } }).lean(),
+      Timetable.find({ sectionId: { $ne: section._id } })
+        .populate("sectionId", "classroom")
+        .lean(),
     ]);
-    const selectedClassroom = section.classroom || classroom;
+
     const result = generateTimetable(subjects, teachers, roomPool || [], {
-      classroom: selectedClassroom,
+      classroom: section.classroom,
       existingTimetables,
     });
 
@@ -39,18 +41,18 @@ exports.generateAndSave = async (req, res) => {
         sectionId,
         departmentId: section.departmentId || null,
         semester: section.semester,
-        classroom: selectedClassroom,
+        classroom: section.classroom,
         grid: result.timetable,
-        warnings: result.warnings,
+        warnings: result.warnings || [],
         status: "generated",
         generatedAt: new Date(),
       },
-      { upsert: true, new: true }
+      { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
     );
 
     return res.json({
       success: result.success,
-      timetable: withNormalizedGrid(saved),
+      timetable: saved,
       warnings: result.warnings,
     });
   } catch (err) {
@@ -60,7 +62,9 @@ exports.generateAndSave = async (req, res) => {
 
 exports.getBySection = async (req, res) => {
   try {
-    const timetable = await Timetable.findOne({ sectionId: req.params.sectionId })
+    const { sectionId } = req.params;
+
+    const timetable = await Timetable.findOne({ sectionId })
       .populate("sectionId")
       .lean();
 
@@ -68,7 +72,8 @@ exports.getBySection = async (req, res) => {
       return res.status(404).json({ error: "Timetable not found" });
     }
 
-    return res.json(withNormalizedGrid(timetable));
+    timetable.grid = normalizeGrid(timetable.grid);
+    return res.json(timetable);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -77,36 +82,46 @@ exports.getBySection = async (req, res) => {
 exports.getByTeacher = async (req, res) => {
   try {
     const { teacherId } = req.params;
-    const timetables = await Timetable.find().populate("sectionId").lean();
 
-    const filtered = timetables.map((rawTimetable) => {
-      const timetable = withNormalizedGrid(rawTimetable);
-      const teacherGrid = timetable.grid.map((day) =>
+    const timetables = await Timetable.find()
+      .populate("sectionId")
+      .lean();
+
+    const filtered = timetables.map((tt) => {
+      const teacherGrid = normalizeGrid(tt.grid).map((day) =>
         day.map((cell) => {
-          const matches = getCellEntries(cell).filter(
-            (entry) => String(entry.teacherId) === String(teacherId)
-          );
+          if (!cell) return null;
 
-          if (matches.length === 0) return null;
-          return matches.length === 1 ? matches[0] : matches;
+          if (Array.isArray(cell)) {
+            const matches = cell.filter(
+              (item) => String(item.teacherId) === String(teacherId)
+            );
+            return matches.length ? matches : null;
+          }
+
+          if (String(cell.teacherId) === String(teacherId)) {
+            return cell;
+          }
+
+          return null;
         })
       );
 
       return {
-        timetableId: timetable._id,
-        section: timetable.sectionId,
-        semester: timetable.semester,
-        classroom: timetable.classroom,
+        timetableId: tt._id,
+        section: tt.sectionId,
+        semester: tt.semester,
+        classroom: tt.classroom,
         grid: teacherGrid,
-        warnings: timetable.warnings,
+        warnings: tt.warnings,
       };
     });
 
-    return res.json(
-      filtered.filter((timetable) =>
-        timetable.grid.some((day) => day.some((cell) => cell !== null))
-      )
+    const onlyWithClasses = filtered.filter((t) =>
+      t.grid.some((day) => day.some((cell) => cell !== null))
     );
+
+    return res.json(onlyWithClasses);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -119,7 +134,12 @@ exports.getAll = async (req, res) => {
       .populate("sectionId")
       .lean();
 
-    return res.json(timetables.map(withNormalizedGrid));
+    return res.json(
+      timetables.map((timetable) => ({
+        ...timetable,
+        grid: normalizeGrid(timetable.grid),
+      }))
+    );
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -129,7 +149,11 @@ exports.updateSlot = async (req, res) => {
   try {
     const { timetableId, day, slot, value } = req.body;
 
-    if (timetableId === undefined || day === undefined || slot === undefined) {
+    if (
+      timetableId === undefined ||
+      day === undefined ||
+      slot === undefined
+    ) {
       return res.status(400).json({
         error: "timetableId, day, and slot are required",
       });
@@ -140,24 +164,36 @@ exports.updateSlot = async (req, res) => {
       return res.status(404).json({ error: "Timetable not found" });
     }
 
+    timetable.grid = normalizeGrid(timetable.grid);
+
     const dayIndex = Number(day);
     const slotIndex = Number(slot);
+
     if (!Number.isInteger(dayIndex) || !Number.isInteger(slotIndex)) {
       return res.status(400).json({ error: "day and slot must be integers" });
     }
 
-    const grid = normalizeGrid(timetable.grid);
-    if (!grid[dayIndex] || slotIndex < 0 || slotIndex >= grid[dayIndex].length) {
-      return res.status(400).json({ error: "Invalid day or slot index" });
+    if (dayIndex < 0 || dayIndex >= timetable.grid.length) {
+      return res.status(400).json({ error: "Invalid day index" });
     }
 
-    grid[dayIndex][slotIndex] = value || null;
-    timetable.grid = grid;
+    if (!Array.isArray(timetable.grid[dayIndex])) {
+      return res.status(400).json({ error: "Invalid timetable day data" });
+    }
+
+    if (slotIndex < 0 || slotIndex >= timetable.grid[dayIndex].length) {
+      return res.status(400).json({ error: "Invalid slot index" });
+    }
+
+    timetable.grid[dayIndex][slotIndex] = value || null;
     timetable.status = "edited";
     timetable.markModified("grid");
     await timetable.save();
 
-    return res.json({ success: true, timetable: withNormalizedGrid(timetable) });
+    return res.json({
+      success: true,
+      timetable,
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

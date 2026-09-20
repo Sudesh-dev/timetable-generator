@@ -1,9 +1,13 @@
-const { normalizeGrid, getCellEntries } = require("./timetableGrid");
-
 const DAYS = 6;
 const SLOTS = 9;
+
+// Break and lunch remain empty in the stored grid. These are the seven
+// teaching periods rendered by the existing frontend.
 const TEACHING_SLOTS = [0, 1, 3, 4, 6, 7, 8];
 const MAX_TEACHER_SESSIONS_PER_DAY = 3;
+const MAX_SEARCH_NODES = 250000;
+const MAX_SEARCH_MILLISECONDS = 1500;
+const OPTIMIZATION_NODES_AFTER_FIRST_SOLUTION = 5000;
 
 function createEmptyGrid() {
   return Array.from({ length: DAYS }, () =>
@@ -13,369 +17,652 @@ function createEmptyGrid() {
 
 function getId(value) {
   if (!value) return "";
-  return String(value._id || value.id || value);
+  if (value._id) return String(value._id);
+  return String(value);
 }
 
-function getTeacherIds(subject) {
-  if (Array.isArray(subject.allowedTeachers)) {
-    return subject.allowedTeachers.map(getId).filter(Boolean);
+function getEntries(cell) {
+  if (!cell) return [];
+  return Array.isArray(cell) ? cell : [cell];
+}
+
+function normalizeGrid(grid) {
+  let value = grid;
+
+  // Older records were saved through a three-dimensional Mongoose schema,
+  // which wrapped the intended 6 x 9 grid in one additional array.
+  if (
+    Array.isArray(value) &&
+    value.length === 1 &&
+    Array.isArray(value[0]) &&
+    value[0].length === DAYS
+  ) {
+    value = value[0];
   }
 
-  return [getId(subject.teacherId || subject.teacher)].filter(Boolean);
+  if (!Array.isArray(value)) return createEmptyGrid();
+
+  return Array.from({ length: DAYS }, (_, day) => {
+    const sourceDay = Array.isArray(value[day]) ? value[day] : [];
+    return Array.from({ length: SLOTS }, (_, slot) => sourceDay[slot] || null);
+  });
 }
 
-function getTeacherName(teachers, teacherId, subject) {
-  const teacher = teachers.find((item) => getId(item) === teacherId);
-  if (teacher?.name) return teacher.name;
+function normalizeRoomName(value, fallback = "") {
+  if (typeof value === "string") return value.trim() || fallback;
+  if (value && typeof value.name === "string") return value.name.trim() || fallback;
+  return fallback;
+}
 
-  const populatedTeacher = subject.allowedTeachers?.find(
-    (item) => getId(item) === teacherId
+function roomKey(value) {
+  return normalizeRoomName(value).toLowerCase();
+}
+
+function teacherNameMap(teachers) {
+  return new Map(
+    teachers.map((teacher) => [getId(teacher), teacher.name || "Unknown"])
   );
-  return populatedTeacher?.name || "Unknown";
+}
+
+function existingTeacherIds(teachers) {
+  return new Set(teachers.map(getId).filter(Boolean));
+}
+
+function getAllowedTeacherIds(subject, knownTeachers) {
+  const values = Array.isArray(subject.allowedTeachers)
+    ? subject.allowedTeachers
+    : [];
+
+  return [...new Set(values.map(getId).filter((id) => knownTeachers.has(id)))];
 }
 
 function isLab(subject) {
   return String(subject.type || "").toLowerCase() === "lab";
 }
 
-function roomName(room) {
-  if (typeof room === "string") return room.trim();
-  return String(room?.name || "").trim();
+function getContinuousStarts(duration) {
+  return TEACHING_SLOTS.filter((start) => {
+    for (let offset = 0; offset < duration; offset++) {
+      if (!TEACHING_SLOTS.includes(start + offset)) return false;
+    }
+    return true;
+  });
 }
 
-function normalizeRoomPool(roomPool) {
-  const names = (Array.isArray(roomPool) ? roomPool : [])
-    .map(roomName)
-    .filter(Boolean);
-  return [...new Set(names.length > 0 ? names : ["Lab"])];
+function teachingPosition(slot) {
+  return TEACHING_SLOTS.indexOf(slot);
 }
 
-function resolveExistingRoom(entry, timetable) {
-  const value = roomName(entry?.room);
-  const genericTheoryRoom = !value || value.toLowerCase() === "classroom";
-
-  if (!isLab(entry || {}) && genericTheoryRoom) {
-    return roomName(timetable.classroom) || "Classroom";
-  }
-
-  return value || roomName(timetable.classroom);
+function previousTeachingSlot(slot) {
+  const position = teachingPosition(slot);
+  return position > 0 ? TEACHING_SLOTS[position - 1] : null;
 }
 
-function createExternalConstraints(existingTimetables) {
-  const teachersAt = Array.from({ length: DAYS }, () =>
-    Array.from({ length: SLOTS }, () => new Set())
-  );
-  const roomsAt = Array.from({ length: DAYS }, () =>
-    Array.from({ length: SLOTS }, () => new Set())
-  );
-  const teacherSessions = Array.from({ length: DAYS }, () => new Map());
+function nextTeachingSlot(slot) {
+  const position = teachingPosition(slot);
+  return position >= 0 && position < TEACHING_SLOTS.length - 1
+    ? TEACHING_SLOTS[position + 1]
+    : null;
+}
 
-  (existingTimetables || []).forEach((timetable, timetableIndex) => {
-    const grid = normalizeGrid(timetable.grid);
-    const timetableId = getId(timetable) || `existing-${timetableIndex}`;
+function buildRequirements(subjects, teachers, warnings) {
+  const knownTeachers = existingTeacherIds(teachers);
+  const requirements = [];
 
-    grid.forEach((day, dayIndex) => {
-      const seenSessions = new Set();
+  subjects.forEach((subject, index) => {
+    const subjectId = getId(subject) || `subject-${index}`;
+    const subjectName = String(subject.name || subject.code || "Unnamed subject").trim();
+    const weeklySlots = Number(subject.weeklySlots);
+    const lab = isLab(subject);
+    const duration = lab ? Number(subject.duration || 2) : 1;
+    const allowedTeachers = getAllowedTeacherIds(subject, knownTeachers);
 
-      day.forEach((cell, slotIndex) => {
-        getCellEntries(cell).forEach((entry, entryIndex) => {
-          const teacherId = getId(entry.teacherId);
-          const room = resolveExistingRoom(entry, timetable);
+    if (!Number.isInteger(weeklySlots) || weeklySlots < 1) {
+      warnings.push(`${subjectName} has an invalid weeklySlots value.`);
+      return;
+    }
 
-          if (teacherId) teachersAt[dayIndex][slotIndex].add(teacherId);
-          if (room) roomsAt[dayIndex][slotIndex].add(room);
-          if (!teacherId) return;
+    if (allowedTeachers.length === 0) {
+      warnings.push(`${subjectName} has no valid assigned teacher.`);
+      return;
+    }
 
-          const sessionKey = entry.blockId
-            ? `${timetableId}:${teacherId}:${entry.blockId}`
-            : `${timetableId}:${teacherId}:${slotIndex}:${entryIndex}`;
+    if (lab && (!Number.isInteger(duration) || duration < 2 || duration > 3)) {
+      warnings.push(`${subjectName} must have a lab duration of 2 or 3 periods.`);
+      return;
+    }
 
-          if (!seenSessions.has(sessionKey)) {
-            seenSessions.add(sessionKey);
-            const sessions = teacherSessions[dayIndex].get(teacherId) || 0;
-            teacherSessions[dayIndex].set(teacherId, sessions + 1);
-          }
-        });
-      });
+    if (lab && weeklySlots % duration !== 0) {
+      warnings.push(
+        `${subjectName} requires ${weeklySlots} weekly periods, which is not divisible by its ${duration}-period lab duration.`
+      );
+    }
+
+    const requestedSessions = lab
+      ? Math.floor(weeklySlots / duration)
+      : weeklySlots;
+    const sessions = Math.min(requestedSessions, DAYS);
+
+    if (requestedSessions > DAYS) {
+      warnings.push(
+        `${subjectName} requires ${requestedSessions} weekly sessions, but the one-session-per-day rule allows at most ${DAYS}.`
+      );
+    }
+
+    if (sessions === 0) return;
+
+    requirements.push({
+      subjectId,
+      subjectName,
+      type: lab ? "lab" : String(subject.type || "theory").toLowerCase(),
+      duration,
+      sessions,
+      remaining: sessions,
+      allowedTeachers,
+      assignedTeacherId: null,
+      usedDays: new Set(),
     });
   });
 
-  return { teachersAt, roomsAt, teacherSessions };
+  return requirements;
 }
 
-function currentEntriesAt(grid, day, slot) {
-  return getCellEntries(grid[day][slot]);
+function sessionKeyFromEntry(entry, timetableIndex, day, slot) {
+  if (entry.blockId) return `existing:${timetableIndex}:${entry.blockId}`;
+
+  const subjectId = getId(entry.subjectId) || entry.subjectName || "session";
+  const type = String(entry.type || "theory").toLowerCase();
+
+  // Old lab records sometimes omitted blockId. Contiguous entries for the
+  // same subject are treated as one teaching session for the daily limit.
+  if (type === "lab" || type === "project") {
+    return `existing:${timetableIndex}:${day}:${subjectId}`;
+  }
+
+  return `existing:${timetableIndex}:${day}:${slot}:${subjectId}`;
 }
 
-function teacherBusyAt(state, teacherId, day, slot) {
-  if (state.external.teachersAt[day][slot].has(teacherId)) return true;
-  return currentEntriesAt(state.grid, day, slot).some(
-    (entry) => getId(entry.teacherId) === teacherId
-  );
+function createExternalState(existingTimetables) {
+  const teacherSlots = new Map();
+  const teacherDailySessions = new Map();
+  const roomSlots = new Map();
+
+  function ensureTeacher(teacherId) {
+    if (!teacherSlots.has(teacherId)) {
+      teacherSlots.set(
+        teacherId,
+        Array.from({ length: DAYS }, () => Array(SLOTS).fill(null))
+      );
+      teacherDailySessions.set(
+        teacherId,
+        Array.from({ length: DAYS }, () => new Set())
+      );
+    }
+  }
+
+  function ensureRoom(key) {
+    if (!roomSlots.has(key)) {
+      roomSlots.set(
+        key,
+        Array.from({ length: DAYS }, () => Array(SLOTS).fill(false))
+      );
+    }
+  }
+
+  existingTimetables.forEach((timetable, timetableIndex) => {
+    const grid = normalizeGrid(timetable.grid);
+    const sectionClassroom = normalizeRoomName(
+      timetable.sectionId?.classroom || timetable.classroom
+    );
+
+    for (let day = 0; day < DAYS; day++) {
+      for (const slot of TEACHING_SLOTS) {
+        getEntries(grid[day][slot]).forEach((entry) => {
+          if (!entry || typeof entry !== "object") return;
+
+          const teacherId = getId(entry.teacherId);
+          const sessionKey = sessionKeyFromEntry(entry, timetableIndex, day, slot);
+
+          if (teacherId) {
+            ensureTeacher(teacherId);
+            teacherSlots.get(teacherId)[day][slot] = sessionKey;
+            teacherDailySessions.get(teacherId)[day].add(sessionKey);
+          }
+
+          const entryRoom = normalizeRoomName(entry.room);
+          const resolvedRoom =
+            !entryRoom || entryRoom.toLowerCase() === "classroom"
+              ? sectionClassroom
+              : entryRoom;
+          const key = roomKey(resolvedRoom);
+
+          if (key) {
+            ensureRoom(key);
+            roomSlots.get(key)[day][slot] = true;
+          }
+        });
+      }
+    }
+  });
+
+  return { teacherSlots, teacherDailySessions, roomSlots };
 }
 
-function roomBusyAt(state, room, day, slot) {
-  if (state.external.roomsAt[day][slot].has(room)) return true;
-  return currentEntriesAt(state.grid, day, slot).some(
-    (entry) => roomName(entry.room) === room
-  );
+function createPlanningState(existingTimetables) {
+  return {
+    grid: createEmptyGrid(),
+    teacherSlots: new Map(),
+    teacherDailySessions: new Map(),
+    external: createExternalState(existingTimetables),
+    placedSessions: [],
+  };
+}
+
+function ensureLocalTeacher(state, teacherId) {
+  if (!state.teacherSlots.has(teacherId)) {
+    state.teacherSlots.set(
+      teacherId,
+      Array.from({ length: DAYS }, () => Array(SLOTS).fill(null))
+    );
+    state.teacherDailySessions.set(
+      teacherId,
+      Array.from({ length: DAYS }, () => new Set())
+    );
+  }
 }
 
 function teacherSessionCount(state, teacherId, day) {
-  const external = state.external.teacherSessions[day].get(teacherId) || 0;
-  const current = state.teacherSessions[day].get(teacherId) || 0;
-  return external + current;
+  const local = state.teacherDailySessions.get(teacherId)?.[day]?.size || 0;
+  const external =
+    state.external.teacherDailySessions.get(teacherId)?.[day]?.size || 0;
+  return local + external;
 }
 
-function adjacentTeachingSlots(slot) {
-  const index = TEACHING_SLOTS.indexOf(slot);
-  return [TEACHING_SLOTS[index - 1], TEACHING_SLOTS[index + 1]].filter(
-    (value) => value !== undefined
+function teacherSlotValue(state, teacherId, day, slot) {
+  return (
+    state.teacherSlots.get(teacherId)?.[day]?.[slot] ||
+    state.external.teacherSlots.get(teacherId)?.[day]?.[slot] ||
+    null
   );
 }
 
-function teacherHasAdjacentSession(state, teacherId, day, slots) {
-  const candidateSlots = new Set(slots);
-
-  return slots.some((slot) =>
-    adjacentTeachingSlots(slot).some(
-      (adjacent) =>
-        !candidateSlots.has(adjacent) && teacherBusyAt(state, teacherId, day, adjacent)
-    )
-  );
-}
-
-function isContinuousBlock(start, duration) {
-  const startIndex = TEACHING_SLOTS.indexOf(start);
-  if (startIndex < 0) return false;
-
-  const slots = TEACHING_SLOTS.slice(startIndex, startIndex + duration);
-  if (slots.length !== duration) return false;
-
-  return slots.every((slot, index) => index === 0 || slot === slots[index - 1] + 1);
-}
-
-function blockSlots(start, duration) {
-  return Array.from({ length: duration }, (_, index) => start + index);
-}
-
-function canPlace(state, subjectState, day, slots, room) {
-  if (state.subjectDays.get(subjectState.id)?.has(day)) return false;
-  if (
-    teacherSessionCount(state, subjectState.teacherId, day) >=
-    MAX_TEACHER_SESSIONS_PER_DAY
-  ) {
+function teacherCanTakeBlock(state, teacherId, day, start, duration) {
+  if (teacherSessionCount(state, teacherId, day) >= MAX_TEACHER_SESSIONS_PER_DAY) {
     return false;
   }
-  if (teacherHasAdjacentSession(state, subjectState.teacherId, day, slots)) return false;
 
-  return slots.every(
-    (slot) =>
-      TEACHING_SLOTS.includes(slot) &&
-      state.grid[day][slot] === null &&
-      !teacherBusyAt(state, subjectState.teacherId, day, slot) &&
-      !roomBusyAt(state, room, day, slot)
-  );
+  for (let offset = 0; offset < duration; offset++) {
+    if (teacherSlotValue(state, teacherId, day, start + offset)) return false;
+  }
+
+  // A multi-period lab is one continuous session. Only its outside edges are
+  // checked so the teacher can teach the periods inside the lab block.
+  const before = previousTeachingSlot(start);
+  const after = nextTeachingSlot(start + duration - 1);
+
+  if (before !== null && teacherSlotValue(state, teacherId, day, before)) {
+    return false;
+  }
+
+  if (after !== null && teacherSlotValue(state, teacherId, day, after)) {
+    return false;
+  }
+
+  return true;
 }
 
-function countDayGaps(grid, day, proposedSlots) {
-  const occupied = new Set(proposedSlots);
-  TEACHING_SLOTS.forEach((slot) => {
-    if (grid[day][slot] !== null) occupied.add(slot);
+function roomIsFree(state, room, day, start, duration) {
+  const key = roomKey(room);
+  if (!key) return true;
+
+  const externalRoom = state.external.roomSlots.get(key);
+  for (let offset = 0; offset < duration; offset++) {
+    if (externalRoom?.[day]?.[start + offset]) return false;
+  }
+  return true;
+}
+
+function sectionSlotsAreFree(state, day, start, duration) {
+  for (let offset = 0; offset < duration; offset++) {
+    if (state.grid[day][start + offset] !== null) return false;
+  }
+  return true;
+}
+
+function getCandidateRooms(requirement, classroom, roomPool) {
+  if (requirement.type !== "lab") return [classroom];
+
+  const rooms = roomPool
+    .map((room) => normalizeRoomName(room))
+    .filter(Boolean);
+
+  return [...new Set(rooms.length > 0 ? rooms : ["Lab"])];
+}
+
+function compactnessCost(grid, day, start, duration) {
+  const occupied = new Set();
+
+  TEACHING_SLOTS.forEach((slot, position) => {
+    if (grid[day][slot] !== null) occupied.add(position);
   });
 
-  const segments = [TEACHING_SLOTS.slice(0, 4), TEACHING_SLOTS.slice(4)];
-  return segments.reduce((total, segment) => {
-    const indexes = segment
-      .map((slot, index) => (occupied.has(slot) ? index : -1))
-      .filter((index) => index >= 0);
-    if (indexes.length < 2) return total;
+  for (let offset = 0; offset < duration; offset++) {
+    occupied.add(teachingPosition(start + offset));
+  }
 
-    const first = Math.min(...indexes);
-    const last = Math.max(...indexes);
-    const holes = segment.slice(first, last + 1).filter((slot) => !occupied.has(slot));
-    return total + holes.length;
+  const positions = [...occupied].sort((a, b) => a - b);
+  const last = positions[positions.length - 1] ?? -1;
+  let internalGaps = 0;
+
+  for (let position = 0; position <= last; position++) {
+    if (!occupied.has(position)) internalGaps++;
+  }
+
+  // Gaps are expensive; lower daily load keeps teaching spread across all six
+  // days, and the final term pushes unused periods toward the end of each day.
+  return internalGaps * 1000 + occupied.size * 20 + last;
+}
+
+function gridGapCount(grid) {
+  return grid.reduce((total, day) => {
+    const occupied = TEACHING_SLOTS.map((slot) => day[slot] !== null);
+    const lastOccupied = occupied.lastIndexOf(true);
+
+    if (lastOccupied < 0) return total;
+
+    return (
+      total +
+      occupied
+        .slice(0, lastOccupied + 1)
+        .filter((isOccupied) => !isOccupied).length
+    );
   }, 0);
 }
 
-function dayLoad(grid, day) {
-  return TEACHING_SLOTS.filter((slot) => grid[day][slot] !== null).length;
-}
-
-function candidateScore(state, candidate, task) {
-  const gapPenalty = countDayGaps(state.grid, candidate.day, candidate.slots) * 100;
-  const loadPenalty = dayLoad(state.grid, candidate.day) * 4;
-  const dayRotation = (candidate.day - task.round + DAYS) % DAYS;
-  const slotOrder = TEACHING_SLOTS.indexOf(candidate.slots[0]);
-  const labPreference =
-    task.duration > 1 ? [6, 0, 3, 7].indexOf(candidate.slots[0]) : 0;
-
-  return (
-    gapPenalty +
-    loadPenalty +
-    dayRotation +
-    slotOrder +
-    Math.max(labPreference, 0)
-  );
-}
-
-function getCandidates(state, subjectState, task, rooms) {
-  const starts =
-    task.duration > 1
-      ? TEACHING_SLOTS.filter((slot) => isContinuousBlock(slot, task.duration))
-      : TEACHING_SLOTS;
+function enumerateCandidates(state, requirement, classroom, roomPool) {
+  const starts = getContinuousStarts(requirement.duration);
+  const teachers = requirement.assignedTeacherId
+    ? [requirement.assignedTeacherId]
+    : requirement.allowedTeachers;
+  const rooms = getCandidateRooms(requirement, classroom, roomPool);
   const candidates = [];
 
   for (let day = 0; day < DAYS; day++) {
+    if (requirement.usedDays.has(day)) continue;
+
     for (const start of starts) {
-      const slots = blockSlots(start, task.duration);
-      for (const room of rooms) {
-        if (!canPlace(state, subjectState, day, slots, room)) continue;
-        candidates.push({ day, slots, room });
+      if (!sectionSlotsAreFree(state, day, start, requirement.duration)) continue;
+
+      for (const teacherId of teachers) {
+        if (!teacherCanTakeBlock(state, teacherId, day, start, requirement.duration)) {
+          continue;
+        }
+
+        for (const room of rooms) {
+          if (!roomIsFree(state, room, day, start, requirement.duration)) continue;
+
+          candidates.push({
+            day,
+            start,
+            teacherId,
+            room,
+            cost:
+              compactnessCost(state.grid, day, start, requirement.duration) +
+              teacherSessionCount(state, teacherId, day) * 5,
+          });
+        }
       }
     }
   }
 
-  return candidates.sort(
-    (left, right) =>
-      candidateScore(state, left, task) - candidateScore(state, right, task)
-  );
+  return candidates.sort((a, b) => {
+    if (a.cost !== b.cost) return a.cost - b.cost;
+    if (a.day !== b.day) return a.day - b.day;
+    if (a.start !== b.start) return a.start - b.start;
+    return a.teacherId.localeCompare(b.teacherId);
+  });
 }
 
-function placeTask(state, subjectState, task, candidate, teachers) {
-  const blockId =
-    task.duration > 1
-      ? `${subjectState.id}-${candidate.day}-${candidate.slots[0]}-${task.round}`
-      : null;
-  const entry = {
-    subjectId: subjectState.id,
-    subjectName: subjectState.subject.name,
-    teacherId: subjectState.teacherId,
-    teacherName: getTeacherName(
-      teachers,
-      subjectState.teacherId,
-      subjectState.subject
+function selectNextRequirement(state, requirements, classroom, roomPool) {
+  let best = null;
+
+  for (const requirement of requirements) {
+    if (requirement.remaining <= 0) continue;
+
+    const candidates = enumerateCandidates(
+      state,
+      requirement,
+      classroom,
+      roomPool
+    );
+
+    if (
+      !best ||
+      candidates.length < best.candidates.length ||
+      (candidates.length === best.candidates.length &&
+        requirement.duration > best.requirement.duration) ||
+      (candidates.length === best.candidates.length &&
+        requirement.duration === best.requirement.duration &&
+        requirement.remaining > best.requirement.remaining)
+    ) {
+      best = { requirement, candidates };
+    }
+  }
+
+  return best;
+}
+
+function buildEntry(requirement, teacherId, teacherNames, room, blockId) {
+  return {
+    subjectId: requirement.subjectId,
+    subjectName: requirement.subjectName,
+    teacherId,
+    teacherName: teacherNames.get(teacherId) || "Unknown",
+    room,
+    type: requirement.type,
+    blockId: requirement.duration > 1 ? blockId : null,
+  };
+}
+
+function placeCandidate(state, requirement, candidate, teacherNames) {
+  const previousAssignment = requirement.assignedTeacherId;
+  const sessionKey = `${requirement.subjectId}:${candidate.day}:${candidate.start}`;
+  const blockId = `block-${sessionKey}`;
+  const entry = buildEntry(
+    requirement,
+    candidate.teacherId,
+    teacherNames,
+    candidate.room,
+    blockId
+  );
+
+  ensureLocalTeacher(state, candidate.teacherId);
+
+  for (let offset = 0; offset < requirement.duration; offset++) {
+    const slot = candidate.start + offset;
+    state.grid[candidate.day][slot] = entry;
+    state.teacherSlots.get(candidate.teacherId)[candidate.day][slot] = sessionKey;
+  }
+
+  state.teacherDailySessions
+    .get(candidate.teacherId)[candidate.day]
+    .add(sessionKey);
+  state.placedSessions.push({ requirement, candidate, sessionKey });
+  requirement.assignedTeacherId = candidate.teacherId;
+  requirement.usedDays.add(candidate.day);
+  requirement.remaining--;
+
+  return { previousAssignment, sessionKey };
+}
+
+function removeCandidate(state, requirement, candidate, placement) {
+  for (let offset = 0; offset < requirement.duration; offset++) {
+    const slot = candidate.start + offset;
+    state.grid[candidate.day][slot] = null;
+    state.teacherSlots.get(candidate.teacherId)[candidate.day][slot] = null;
+  }
+
+  state.teacherDailySessions
+    .get(candidate.teacherId)[candidate.day]
+    .delete(placement.sessionKey);
+  state.placedSessions.pop();
+  requirement.usedDays.delete(candidate.day);
+  requirement.remaining++;
+  requirement.assignedTeacherId = placement.previousAssignment;
+}
+
+function clonePlannerSnapshot(state, requirements) {
+  return {
+    grid: state.grid.map((day) => day.slice()),
+    placedCount: state.placedSessions.length,
+    gapCount: gridGapCount(state.grid),
+    remainingBySubject: new Map(
+      requirements.map((requirement) => [
+        requirement.subjectId,
+        requirement.remaining,
+      ])
     ),
-    room: candidate.room,
-    type: isLab(subjectState.subject)
-      ? "lab"
-      : subjectState.subject.type || "theory",
-    blockId,
   };
-
-  candidate.slots.forEach((slot) => {
-    state.grid[candidate.day][slot] = { ...entry };
-  });
-
-  if (!state.subjectDays.has(subjectState.id)) {
-    state.subjectDays.set(subjectState.id, new Set());
-  }
-  state.subjectDays.get(subjectState.id).add(candidate.day);
-
-  const current =
-    state.teacherSessions[candidate.day].get(subjectState.teacherId) || 0;
-  state.teacherSessions[candidate.day].set(subjectState.teacherId, current + 1);
 }
 
-function prepareSubjects(subjects, warnings) {
-  return (subjects || []).flatMap((subject) => {
-    const id = getId(subject);
-    const weeklySlots = Number(subject.weeklySlots);
-    const teacherId = getTeacherIds(subject)[0];
+function solve(requirements, teachers, classroom, roomPool, existingTimetables) {
+  const state = createPlanningState(existingTimetables);
+  const teacherNames = teacherNameMap(teachers);
+  const startedAt = Date.now();
+  let nodes = 0;
+  let best = clonePlannerSnapshot(state, requirements);
+  let complete = false;
+  let firstCompleteNode = null;
+  let searchLimitReached = false;
 
-    if (!id || !subject.name) {
-      warnings.push("A subject is missing its id or name");
-      return [];
-    }
-    if (!Number.isInteger(weeklySlots) || weeklySlots <= 0) {
-      warnings.push(`Invalid weeklySlots for ${subject.name}`);
-      return [];
-    }
-    if (!teacherId) {
-      warnings.push(`No teacher assigned for ${subject.name}`);
-      return [];
+  function search() {
+    if (requirements.every((requirement) => requirement.remaining === 0)) {
+      complete = true;
+      const candidate = clonePlannerSnapshot(state, requirements);
+
+      if (
+        candidate.placedCount > best.placedCount ||
+        (candidate.placedCount === best.placedCount &&
+          candidate.gapCount < best.gapCount)
+      ) {
+        best = candidate;
+      }
+
+      if (firstCompleteNode === null) firstCompleteNode = nodes;
+
+      // A compact timetable cannot be improved further, so stop searching.
+      return candidate.gapCount === 0;
     }
 
-    const duration = isLab(subject) ? Number(subject.duration || 2) : 1;
-    if (isLab(subject) && ![2, 3].includes(duration)) {
-      warnings.push(
-        `${subject.name} must use a continuous 2- or 3-period lab block`
+    const optimizationFinished =
+      firstCompleteNode !== null &&
+      nodes - firstCompleteNode >= OPTIMIZATION_NODES_AFTER_FIRST_SOLUTION;
+    const timedOut = Date.now() - startedAt >= MAX_SEARCH_MILLISECONDS;
+
+    if (nodes >= MAX_SEARCH_NODES || timedOut || optimizationFinished) {
+      searchLimitReached = !complete && (nodes >= MAX_SEARCH_NODES || timedOut);
+      return true;
+    }
+    nodes++;
+
+    const next = selectNextRequirement(state, requirements, classroom, roomPool);
+    if (!next || next.candidates.length === 0) return false;
+
+    for (const candidate of next.candidates) {
+      const placement = placeCandidate(
+        state,
+        next.requirement,
+        candidate,
+        teacherNames
       );
-      return [];
+
+      const candidateSnapshot = clonePlannerSnapshot(state, requirements);
+      if (
+        candidateSnapshot.placedCount > best.placedCount ||
+        (candidateSnapshot.placedCount === best.placedCount &&
+          candidateSnapshot.gapCount < best.gapCount)
+      ) {
+        best = candidateSnapshot;
+      }
+
+      if (search()) return true;
+
+      removeCandidate(state, next.requirement, candidate, placement);
     }
-    if (weeklySlots % duration !== 0) {
-      warnings.push(
-        `${subject.name} weeklySlots must be divisible by its ${duration}-period duration`
-      );
-      return [];
-    }
 
-    return [{ id, subject, teacherId, weeklySlots, duration }];
-  });
-}
-
-function buildTasks(subjectStates) {
-  const tasks = [];
-  const ordered = [...subjectStates].sort(
-    (left, right) => right.duration - left.duration
-  );
-  const remaining = new Map(
-    ordered.map((item) => [item.id, item.weeklySlots / item.duration])
-  );
-  let round = 0;
-
-  while ([...remaining.values()].some((value) => value > 0)) {
-    ordered.forEach((subjectState) => {
-      const count = remaining.get(subjectState.id);
-      if (count <= 0) return;
-      tasks.push({ subjectState, duration: subjectState.duration, round });
-      remaining.set(subjectState.id, count - 1);
-    });
-    round++;
+    return false;
   }
 
-  return tasks;
-}
-
-function generateTimetable(subjects, teachers, roomPool = [], context = {}) {
-  const warnings = [];
-  const subjectStates = prepareSubjects(subjects, warnings);
-  const labRooms = normalizeRoomPool(roomPool);
-  const classroom = roomName(context.classroom) || "Classroom";
-  const state = {
-    grid: createEmptyGrid(),
-    external: createExternalConstraints(context.existingTimetables || []),
-    subjectDays: new Map(),
-    teacherSessions: Array.from({ length: DAYS }, () => new Map()),
-  };
-  const unplaced = new Map();
-
-  buildTasks(subjectStates).forEach((task) => {
-    const rooms = task.duration > 1 ? labRooms : [classroom];
-    const candidate = getCandidates(state, task.subjectState, task, rooms)[0];
-
-    if (!candidate) {
-      const current = unplaced.get(task.subjectState.id) || 0;
-      unplaced.set(task.subjectState.id, current + task.duration);
-      return;
-    }
-
-    placeTask(state, task.subjectState, task, candidate, teachers || []);
-  });
-
-  subjectStates.forEach((subjectState) => {
-    const remaining = unplaced.get(subjectState.id) || 0;
-    if (remaining > 0) {
-      warnings.push(
-        `Could not place ${remaining} weekly slot(s) for ${subjectState.subject.name}`
-      );
-    }
-  });
+  search();
 
   return {
-    timetable: state.grid,
-    warnings,
-    success: warnings.length === 0,
+    grid: best.grid,
+    complete,
+    searchLimitReached,
+    remainingBySubject: best.remainingBySubject,
+  };
+}
+
+function generateTimetable(subjects, teachers, roomPool = [], options = {}) {
+  const warnings = [];
+  const safeSubjects = Array.isArray(subjects) ? subjects : [];
+  const safeTeachers = Array.isArray(teachers) ? teachers : [];
+  const safeRoomPool = Array.isArray(roomPool) ? roomPool : [];
+  const existingTimetables = Array.isArray(options.existingTimetables)
+    ? options.existingTimetables
+    : [];
+  const classroom = normalizeRoomName(options.classroom, "Classroom");
+
+  if (safeSubjects.length === 0) {
+    return {
+      timetable: createEmptyGrid(),
+      warnings: ["No subjects are configured for this section."],
+      success: false,
+    };
+  }
+
+  const requirements = buildRequirements(safeSubjects, safeTeachers, warnings);
+
+  if (requirements.length === 0) {
+    return {
+      timetable: createEmptyGrid(),
+      warnings,
+      success: false,
+    };
+  }
+
+  if (
+    requirements.some((requirement) => requirement.type === "lab") &&
+    safeRoomPool.length === 0
+  ) {
+    warnings.push("No lab rooms were supplied; the fallback room name 'Lab' was used.");
+  }
+
+  const result = solve(
+    requirements,
+    safeTeachers,
+    classroom,
+    safeRoomPool,
+    existingTimetables
+  );
+
+  requirements.forEach((requirement) => {
+    const remaining = result.remainingBySubject.get(requirement.subjectId) || 0;
+    if (remaining > 0) {
+      warnings.push(
+        `Could not place ${remaining} session${remaining === 1 ? "" : "s"} for ${requirement.subjectName} without breaking a timetable constraint.`
+      );
+    }
+  });
+
+  if (result.searchLimitReached && !result.complete) {
+    warnings.push("The timetable search limit was reached before a complete solution was found.");
+  }
+
+  return {
+    timetable: result.grid,
+    warnings: [...new Set(warnings)],
+    success: result.complete && warnings.length === 0,
   };
 }
 
@@ -384,5 +671,7 @@ module.exports = {
   SLOTS,
   TEACHING_SLOTS,
   MAX_TEACHER_SESSIONS_PER_DAY,
+  createEmptyGrid,
+  normalizeGrid,
   generateTimetable,
 };
