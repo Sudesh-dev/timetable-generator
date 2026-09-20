@@ -2,15 +2,19 @@ const Subject = require("../models/Subject");
 const Teacher = require("../models/Teacher");
 const Section = require("../models/Section");
 const Timetable = require("../models/Timetable");
-const { generateTimetable } = require("../services/generator");
+const {
+  generateTimetable,
+  getEntries,
+  normalizeGrid,
+} = require("../services/generator");
 
 exports.generateAndSave = async (req, res) => {
   try {
-    const { sectionId, classroom, roomPool } = req.body;
+    const { sectionId, roomPool } = req.body;
 
-    if (!sectionId || !classroom) {
+    if (!sectionId) {
       return res.status(400).json({
-        error: "sectionId and classroom are required",
+        error: "sectionId is required",
       });
     }
 
@@ -23,14 +27,39 @@ exports.generateAndSave = async (req, res) => {
       sectionId,
     });
 
-    const teachers = await Teacher.find();
+    const [teachers, existingTimetables] = await Promise.all([
+      Teacher.find(),
+      Timetable.find({ sectionId: { $ne: section._id } })
+        .select("sectionId classroom grid")
+        .populate("sectionId", "classroom")
+        .lean(),
+    ]);
 
-    // ✅ FIX HERE
-    const result = generateTimetable(
-      subjects,
-      teachers,
-      roomPool || []
-    );
+    const result = generateTimetable(subjects, teachers, roomPool || [], {
+      classroom: section.classroom,
+      existingTimetables,
+      // A retry explores another ordering among equally valid candidates while
+      // keeping every hard constraint and all saved timetable clashes intact.
+      variationSeed: req.body.variationSeed || Date.now(),
+    });
+
+    // Never replace a previously usable timetable with an incomplete result.
+    // The caller receives the candidate grid and exact warnings for diagnosis,
+    // while MongoDB remains unchanged and can be used safely on the next retry.
+    if (!result.success) {
+      return res.status(422).json({
+        success: false,
+        error: "A complete conflict-free timetable could not be generated.",
+        timetable: {
+          sectionId,
+          semester: section.semester,
+          classroom: section.classroom,
+          grid: result.timetable,
+        },
+        warnings: result.warnings,
+        checkedTimetables: existingTimetables.length,
+      });
+    }
 
     const saved = await Timetable.findOneAndUpdate(
       { sectionId },
@@ -38,19 +67,26 @@ exports.generateAndSave = async (req, res) => {
         sectionId,
         departmentId: section.departmentId || null,
         semester: section.semester,
-        classroom,
+        classroom: section.classroom,
         grid: result.timetable,
         warnings: result.warnings || [],
-        status: result.success ? "generated" : "edited",
+        generationContext: {
+          constraintVersion: "college-v2",
+          referencedTimetableIds: existingTimetables
+            .map((timetable) => timetable._id)
+            .filter(Boolean),
+        },
+        status: "generated",
         generatedAt: new Date(),
       },
-      { upsert: true, new: true }
+      { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
     );
 
     return res.json({
       success: result.success,
       timetable: saved,
       warnings: result.warnings,
+      checkedTimetables: existingTimetables.length,
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -63,11 +99,13 @@ exports.getBySection = async (req, res) => {
 
     const timetable = await Timetable.findOne({ sectionId })
       .populate("sectionId")
+      .lean();
 
     if (!timetable) {
       return res.status(404).json({ error: "Timetable not found" });
     }
 
+    timetable.grid = normalizeGrid(timetable.grid);
     return res.json(timetable);
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -80,24 +118,17 @@ exports.getByTeacher = async (req, res) => {
 
     const timetables = await Timetable.find()
       .populate("sectionId")
+      .lean();
 
     const filtered = timetables.map((tt) => {
-      const teacherGrid = tt.grid.map((day) =>
+      const teacherGrid = normalizeGrid(tt.grid).map((day) =>
         day.map((cell) => {
           if (!cell) return null;
-
-          if (Array.isArray(cell)) {
-            const matches = cell.filter(
-              (item) => String(item.teacherId) === String(teacherId)
-            );
-            return matches.length ? matches : null;
-          }
-
-          if (String(cell.teacherId) === String(teacherId)) {
-            return cell;
-          }
-
-          return null;
+          const matches = getEntries(cell).filter(
+            (item) => String(item.teacherId) === String(teacherId)
+          );
+          if (matches.length === 0) return null;
+          return matches.length === 1 ? matches[0] : matches;
         })
       );
 
@@ -126,9 +157,14 @@ exports.getAll = async (req, res) => {
     const timetables = await Timetable.find()
       .sort({ updatedAt: -1 })
       .populate("sectionId")
-      
+      .lean();
 
-    return res.json(timetables);
+    return res.json(
+      timetables.map((timetable) => ({
+        ...timetable,
+        grid: normalizeGrid(timetable.grid),
+      }))
+    );
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -153,6 +189,8 @@ exports.updateSlot = async (req, res) => {
       return res.status(404).json({ error: "Timetable not found" });
     }
 
+    timetable.grid = normalizeGrid(timetable.grid);
+
     const dayIndex = Number(day);
     const slotIndex = Number(slot);
 
@@ -174,6 +212,7 @@ exports.updateSlot = async (req, res) => {
 
     timetable.grid[dayIndex][slotIndex] = value || null;
     timetable.status = "edited";
+    timetable.markModified("grid");
     await timetable.save();
 
     return res.json({

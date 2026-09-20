@@ -22,12 +22,24 @@ const timetableSchema = new mongoose.Schema(
       required: true,
     },
     grid: {
-      type: [[[mongoose.Schema.Types.Mixed]]],
+      // One array per day and one value per timetable slot (6 x 9).
+      // The previous three-dimensional declaration wrapped every saved grid
+      // in an unintended extra array.
+      type: [[mongoose.Schema.Types.Mixed]],
       default: [],
     },
     warnings: {
       type: [String],
       default: [],
+    },
+    generationContext: {
+      constraintVersion: { type: String, default: "college-v2" },
+      referencedTimetableIds: [
+        {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Timetable",
+        },
+      ],
     },
     generatedAt: {
       type: Date,
