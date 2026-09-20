@@ -22,7 +22,7 @@ const timetableSchema = new mongoose.Schema(
       required: true,
     },
     grid: {
-      type: [[[mongoose.Schema.Types.Mixed]]],
+      type: [[mongoose.Schema.Types.Mixed]],
       default: [],
     },
     warnings: {
