@@ -71,7 +71,7 @@ exports.generateAndSave = async (req, res) => {
         grid: result.timetable,
         warnings: result.warnings || [],
         generationContext: {
-          constraintVersion: "college-v2",
+          constraintVersion: "college-v3-round-robin",
           referencedTimetableIds: existingTimetables
             .map((timetable) => timetable._id)
             .filter(Boolean),

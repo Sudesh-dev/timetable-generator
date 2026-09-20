@@ -61,6 +61,21 @@ function teacherSessionsForDay(grid, teacherId, dayIndex) {
   return sessions.sort((a, b) => a.start - b.start);
 }
 
+function assertNoInternalStudentGaps(grid) {
+  grid.forEach((day, dayIndex) => {
+    const occupied = TEACHING_SLOTS.map((slot) => day[slot] !== null);
+    const firstOccupied = occupied.indexOf(true);
+    const lastOccupied = occupied.lastIndexOf(true);
+    if (firstOccupied < 0) return;
+
+    assert.equal(
+      occupied.slice(firstOccupied, lastOccupied + 1).includes(false),
+      false,
+      `day ${dayIndex} contains an empty teaching period between classes`
+    );
+  });
+}
+
 test("generates from arbitrary database subjects and exact weekly slots", () => {
   const teachers = [
     teacher("t1", "Ada"),
@@ -158,6 +173,41 @@ test("enforces subject-per-day and teacher workload/gap constraints", () => {
       }
     }
   }
+});
+
+test("uses fair round-robin turns when a teacher constraint blocks completion", () => {
+  const unavailableSlots = [];
+  for (let day = 3; day < 6; day++) {
+    TEACHING_SLOTS.forEach((slot) => unavailableSlots.push({ day, slot }));
+  }
+
+  const result = generateTimetable(
+    [
+      subject("round-a", "Round A", 2, ["shared"]),
+      subject("round-b", "Round B", 2, ["shared"]),
+      subject("round-c", "Round C", 2, ["shared"]),
+    ],
+    [
+      {
+        ...teacher("shared"),
+        maxSessionsPerDay: 1,
+        unavailableSlots,
+      },
+    ],
+    [],
+    { classroom: "C-202" }
+  );
+
+  assert.equal(result.success, false);
+  const counts = new Map();
+  scheduledCells(result.timetable).forEach(({ entry }) => {
+    counts.set(entry.subjectId, (counts.get(entry.subjectId) || 0) + 1);
+  });
+  assert.deepEqual(
+    ["round-a", "round-b", "round-c"].map((id) => counts.get(id)),
+    [1, 1, 1]
+  );
+  assertNoInternalStudentGaps(result.timetable);
 });
 
 test("keeps lab periods continuous and treats a lab block as one session", () => {
@@ -631,4 +681,5 @@ test("builds a college-style week with fixed activities and three-way lab rotati
     assert.equal(new Set(entries.map((entry) => entry.teacherId)).size, 3);
     assert.equal(new Set(entries.map((entry) => entry.room)).size, 3);
   });
+  assertNoInternalStudentGaps(result.timetable);
 });

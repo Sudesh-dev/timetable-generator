@@ -17,6 +17,7 @@ A full-stack timetable generator built with Node.js, Express, MongoDB, React, an
 - Teacher conflict checks across saved section timetables
 - Classroom and laboratory-room conflict checks
 - Retry generation with alternative valid candidate ordering
+- Round-robin subject placement with no internal student timetable gaps
 - Constraint warnings when a complete timetable is not possible
 - PDF preview and download for generated timetable
 - Empty-state UI messaging when data is missing
@@ -154,6 +155,9 @@ The backend planner currently enforces:
 - six working days and seven teaching periods per day
 - break and lunch slots remain unavailable
 - at most one session of the same subject per section per day
+- subjects are considered in round-robin order; a temporarily invalid subject
+  is skipped and the next subject is checked
+- no unused teaching period between a day's first and last class
 - at most three teaching sessions per professor per day
 - a gap between separate sessions taught by the same professor
 - no professor assigned to two saved sections at the same time
@@ -161,6 +165,7 @@ The backend planner currently enforces:
 - no classroom or lab-room clashes with saved timetables
 - one consistent professor selected from a subject's `allowedTeachers`
 - different teachers and rooms for simultaneous batch labs
+- at most one lab rotation per batch from the same parallel group each day
 - configured teacher unavailable periods
 - an optional lower teacher session limit (never above three)
 - optional fixed placements for projects and institutional activities

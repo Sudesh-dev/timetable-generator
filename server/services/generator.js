@@ -7,7 +7,7 @@ const TEACHING_SLOTS = [0, 1, 3, 4, 6, 7, 8];
 const MAX_TEACHER_SESSIONS_PER_DAY = 3;
 const MAX_SEARCH_NODES = 250000;
 const MAX_SEARCH_MILLISECONDS = 1500;
-const OPTIMIZATION_NODES_AFTER_FIRST_SOLUTION = 5000;
+const OPTIMIZATION_NODES_AFTER_FIRST_SOLUTION = 10000;
 
 function createEmptyGrid() {
   return Array.from({ length: DAYS }, () =>
@@ -267,6 +267,8 @@ function buildRequirements(subjects, teachers, warnings) {
 
       requirements.push({
         requirementId: `${subjectId}:${batch || "section"}:${batchIndex}`,
+        subjectOrder: index,
+        batchOrder: batchIndex,
         subjectId,
         subjectName,
         type,
@@ -284,7 +286,15 @@ function buildRequirements(subjects, teachers, warnings) {
     });
   });
 
-  return requirements;
+  // Interleave subjects before returning to the next batch variant. This
+  // prevents a subject with B1/B2/B3 requirements from monopolizing the
+  // queue and gives every subject one turn per scheduling round.
+  return requirements.sort(
+    (a, b) =>
+      a.batchOrder - b.batchOrder ||
+      a.subjectOrder - b.subjectOrder ||
+      a.requirementId.localeCompare(b.requirementId)
+  );
 }
 
 function sessionKeyFromEntry(entry, timetableIndex, day, slot) {
@@ -375,6 +385,7 @@ function createPlanningState(existingTimetables, teachers, variationSeed = 0) {
     teacherDailySessions: new Map(),
     roomSlots: new Map(),
     subjectDays: new Map(),
+    parallelBatchDays: new Map(),
     teacherPolicies: teacherPolicyMap(teachers),
     variationSeed: Number(variationSeed) || 0,
     external: createExternalState(existingTimetables),
@@ -421,6 +432,16 @@ function ensureLocalRoom(state, room) {
 
 function subjectAlreadyUsedOnDay(state, subjectId, day) {
   return state.subjectDays.get(subjectId)?.has(day) || false;
+}
+
+function parallelBatchKey(requirement) {
+  if (!requirement.parallelGroup || !requirement.batch) return "";
+  return `${requirement.parallelGroup}:${requirement.batch}`;
+}
+
+function parallelBatchAlreadyUsedOnDay(state, requirement, day) {
+  const key = parallelBatchKey(requirement);
+  return key ? state.parallelBatchDays.get(key)?.has(day) || false : false;
 }
 
 function teacherSessionCount(state, teacherId, day) {
@@ -536,10 +557,11 @@ function compactnessCost(grid, day, start, duration) {
   }
 
   const positions = [...occupied].sort((a, b) => a - b);
+  const first = positions[0] ?? -1;
   const last = positions[positions.length - 1] ?? -1;
   let internalGaps = 0;
 
-  for (let position = 0; position <= last; position++) {
+  for (let position = first; position <= last; position++) {
     if (!occupied.has(position)) internalGaps++;
   }
 
@@ -551,17 +573,53 @@ function compactnessCost(grid, day, start, duration) {
 function gridGapCount(grid) {
   return grid.reduce((total, day) => {
     const occupied = TEACHING_SLOTS.map((slot) => day[slot] !== null);
+    const firstOccupied = occupied.indexOf(true);
     const lastOccupied = occupied.lastIndexOf(true);
 
-    if (lastOccupied < 0) return total;
+    if (firstOccupied < 0) return total;
 
     return (
       total +
       occupied
-        .slice(0, lastOccupied + 1)
+        .slice(firstOccupied, lastOccupied + 1)
         .filter((isOccupied) => !isOccupied).length
     );
   }, 0);
+}
+
+function occupiedPeriodCount(grid) {
+  return grid.reduce(
+    (total, day) =>
+      total + TEACHING_SLOTS.filter((slot) => day[slot] !== null).length,
+    0
+  );
+}
+
+function sectionPlacementIsCompact(state, day, start, duration) {
+  const occupied = new Set();
+  TEACHING_SLOTS.forEach((slot, position) => {
+    if (state.grid[day][slot] !== null) occupied.add(position);
+  });
+
+  const target = new Set();
+  for (let offset = 0; offset < duration; offset++) {
+    target.add(teachingPosition(start + offset));
+  }
+
+  // Adding another batch to an existing parallel block does not change the
+  // section's occupied period range.
+  if ([...target].every((position) => occupied.has(position))) return true;
+
+  const combined = new Set([...occupied, ...target]);
+  const positions = [...combined].sort((a, b) => a - b);
+  const first = positions[0];
+  const last = positions[positions.length - 1];
+
+  for (let position = first; position <= last; position++) {
+    if (!combined.has(position)) return false;
+  }
+
+  return true;
 }
 
 function enumerateCandidates(state, requirement, classroom, roomPool) {
@@ -575,6 +633,7 @@ function enumerateCandidates(state, requirement, classroom, roomPool) {
   for (let day = 0; day < DAYS; day++) {
     if (requirement.usedDays.has(day)) continue;
     if (subjectAlreadyUsedOnDay(state, requirement.subjectId, day)) continue;
+    if (parallelBatchAlreadyUsedOnDay(state, requirement, day)) continue;
 
     for (const start of starts) {
       if (
@@ -587,6 +646,9 @@ function enumerateCandidates(state, requirement, classroom, roomPool) {
       }
 
       if (!sectionCanTakeBlock(state, requirement, day, start)) continue;
+      if (!sectionPlacementIsCompact(state, day, start, requirement.duration)) {
+        continue;
+      }
 
       for (const teacherId of teachers) {
         if (!teacherCanTakeBlock(state, teacherId, day, start, requirement.duration)) {
@@ -628,10 +690,16 @@ function enumerateCandidates(state, requirement, classroom, roomPool) {
   });
 }
 
-function selectNextRequirement(state, requirements, classroom, roomPool) {
-  let best = null;
-
-  for (const requirement of requirements) {
+function selectNextRequirement(
+  state,
+  requirements,
+  classroom,
+  roomPool,
+  roundRobinCursor
+) {
+  for (let offset = 0; offset < requirements.length; offset++) {
+    const index = (roundRobinCursor + offset) % requirements.length;
+    const requirement = requirements[index];
     if (requirement.remaining <= 0) continue;
 
     const candidates = enumerateCandidates(
@@ -641,20 +709,14 @@ function selectNextRequirement(state, requirements, classroom, roomPool) {
       roomPool
     );
 
-    if (
-      !best ||
-      candidates.length < best.candidates.length ||
-      (candidates.length === best.candidates.length &&
-        requirement.duration > best.requirement.duration) ||
-      (candidates.length === best.candidates.length &&
-        requirement.duration === best.requirement.duration &&
-        requirement.remaining > best.requirement.remaining)
-    ) {
-      best = { requirement, candidates };
-    }
+    // If this subject cannot satisfy teacher/room/continuity constraints for
+    // the current state, skip it for this round and try the next subject.
+    if (candidates.length === 0) continue;
+
+    return { requirement, candidates, index };
   }
 
-  return best;
+  return null;
 }
 
 function buildEntry(
@@ -739,6 +801,13 @@ function placeCandidate(state, requirement, candidate, teacherNames) {
     state.subjectDays.set(requirement.subjectId, new Set());
   }
   state.subjectDays.get(requirement.subjectId).add(candidate.day);
+  const batchKey = parallelBatchKey(requirement);
+  if (batchKey) {
+    if (!state.parallelBatchDays.has(batchKey)) {
+      state.parallelBatchDays.set(batchKey, new Set());
+    }
+    state.parallelBatchDays.get(batchKey).add(candidate.day);
+  }
   requirement.remaining--;
 
   return { previousAssignment, sessionKey };
@@ -761,6 +830,8 @@ function removeCandidate(state, requirement, candidate, placement) {
   state.placedSessions.pop();
   requirement.usedDays.delete(candidate.day);
   state.subjectDays.get(requirement.subjectId)?.delete(candidate.day);
+  const batchKey = parallelBatchKey(requirement);
+  if (batchKey) state.parallelBatchDays.get(batchKey)?.delete(candidate.day);
   requirement.remaining++;
   requirement.assignedTeacherId = placement.previousAssignment;
 }
@@ -772,6 +843,7 @@ function clonePlannerSnapshot(state, requirements) {
     ),
     placedCount: state.placedSessions.length,
     gapCount: gridGapCount(state.grid),
+    occupiedCount: occupiedPeriodCount(state.grid),
     remainingByRequirement: new Map(
       requirements.map((requirement) => [
         requirement.requirementId,
@@ -779,6 +851,16 @@ function clonePlannerSnapshot(state, requirements) {
       ])
     ),
   };
+}
+
+function isBetterSnapshot(candidate, current) {
+  if (candidate.placedCount !== current.placedCount) {
+    return candidate.placedCount > current.placedCount;
+  }
+  if (candidate.gapCount !== current.gapCount) {
+    return candidate.gapCount < current.gapCount;
+  }
+  return candidate.occupiedCount < current.occupiedCount;
 }
 
 function solve(
@@ -802,23 +884,21 @@ function solve(
   let firstCompleteNode = null;
   let searchLimitReached = false;
 
-  function search() {
+  function search(roundRobinCursor = 0) {
     if (requirements.every((requirement) => requirement.remaining === 0)) {
       complete = true;
       const candidate = clonePlannerSnapshot(state, requirements);
 
-      if (
-        candidate.placedCount > best.placedCount ||
-        (candidate.placedCount === best.placedCount &&
-          candidate.gapCount < best.gapCount)
-      ) {
+      if (isBetterSnapshot(candidate, best)) {
         best = candidate;
       }
 
       if (firstCompleteNode === null) firstCompleteNode = nodes;
 
-      // A compact timetable cannot be improved further, so stop searching.
-      return candidate.gapCount === 0;
+      // Keep searching briefly after the first complete solution. Another
+      // round-robin arrangement may use fewer section periods by combining
+      // all compatible batch labs into parallel rotations.
+      return false;
     }
 
     const optimizationFinished =
@@ -832,8 +912,14 @@ function solve(
     }
     nodes++;
 
-    const next = selectNextRequirement(state, requirements, classroom, roomPool);
-    if (!next || next.candidates.length === 0) return false;
+    const next = selectNextRequirement(
+      state,
+      requirements,
+      classroom,
+      roomPool,
+      roundRobinCursor
+    );
+    if (!next) return false;
 
     for (const candidate of next.candidates) {
       const placement = placeCandidate(
@@ -844,15 +930,12 @@ function solve(
       );
 
       const candidateSnapshot = clonePlannerSnapshot(state, requirements);
-      if (
-        candidateSnapshot.placedCount > best.placedCount ||
-        (candidateSnapshot.placedCount === best.placedCount &&
-          candidateSnapshot.gapCount < best.gapCount)
-      ) {
+      if (isBetterSnapshot(candidateSnapshot, best)) {
         best = candidateSnapshot;
       }
 
-      if (search()) return true;
+      const nextCursor = (next.index + 1) % requirements.length;
+      if (search(nextCursor)) return true;
 
       removeCandidate(state, next.requirement, candidate, placement);
     }
@@ -972,10 +1055,17 @@ function generateTimetable(subjects, teachers, roomPool = [], options = {}) {
     warnings.push("The timetable search limit was reached before a complete solution was found.");
   }
 
+  const compact = gridGapCount(result.grid) === 0;
+  if (result.complete && !compact) {
+    warnings.push(
+      "The generated timetable contains an unused teaching period between classes."
+    );
+  }
+
   return {
     timetable: finalizeGrid(result.grid),
     warnings: [...new Set(warnings)],
-    success: result.complete && warnings.length === 0,
+    success: result.complete && compact && warnings.length === 0,
   };
 }
 
