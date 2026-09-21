@@ -28,17 +28,17 @@ const batchAssignmentSchema = new mongoose.Schema(
 
 const subjectSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true },
-    code: { type: String, required: true },
+    name: { type: String, required: true, trim: true },
+    code: { type: String, required: true, trim: true },
     type: {
       type: String,
       enum: ["theory", "lab", "tutorial", "activity", "project"],
       required: true,
     },
-    weeklySlots: { type: Number, required: true },
+    weeklySlots: { type: Number, required: true, min: 1, max: 42 },
     // Legacy lab records use duration. sessionDuration extends the same block
     // concept to theory, activity, and project sessions without breaking them.
-    duration: { type: Number, default: 2 },
+    duration: { type: Number, min: 1, max: 3, default: 2 },
     sessionDuration: { type: Number, min: 1, max: 3, default: null },
     batches: [{ type: String }],
     // Subjects in the same parallelGroup may occupy one section slot together
@@ -65,7 +65,7 @@ const subjectSchema = new mongoose.Schema(
     sectionId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Section",
-      default: null,
+      required: true,
     },
   },
   { timestamps: true }

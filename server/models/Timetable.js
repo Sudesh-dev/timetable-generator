@@ -1,5 +1,16 @@
 const mongoose = require("mongoose");
 
+function isISOCalendarDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
+
 const timetableSchema = new mongoose.Schema(
   {
     departmentId: {
@@ -20,6 +31,24 @@ const timetableSchema = new mongoose.Schema(
     classroom: {
       type: String,
       required: true,
+    },
+    workingPeriod: {
+      startDate: {
+        type: String,
+        required: true,
+        validate: {
+          validator: isISOCalendarDate,
+          message: "startDate must be a valid YYYY-MM-DD date",
+        },
+      },
+      endDate: {
+        type: String,
+        required: true,
+        validate: {
+          validator: isISOCalendarDate,
+          message: "endDate must be a valid YYYY-MM-DD date",
+        },
+      },
     },
     grid: {
       // One array per day and one value per timetable slot (6 x 9).
@@ -53,5 +82,9 @@ const timetableSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+timetableSchema.path("workingPeriod.endDate").validate(function validateDateOrder(value) {
+  return !this.workingPeriod?.startDate || value >= this.workingPeriod.startDate;
+}, "endDate must be on or after startDate");
 
 module.exports = mongoose.model("Timetable", timetableSchema);

@@ -70,6 +70,44 @@ h3 {
   width: 100%;
 }
 
+.home-page {
+  min-height: calc(100vh - 52px);
+  justify-content: center;
+}
+
+.home-heading {
+  text-align: center;
+}
+
+.home-heading h1 {
+  font-size: clamp(2rem, 7vw, 3.5rem);
+  margin-bottom: 8px;
+}
+
+.home-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.home-actions a,
+.home-actions button {
+  width: 100%;
+}
+
+.field-label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.edit-instructions {
+  margin: 0;
+  text-align: center;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -112,7 +150,8 @@ select:focus {
   box-shadow: 0 0 0 3px rgba(15, 111, 141, 0.15);
 }
 
-button {
+button,
+.home-button {
   border: none;
   border-radius: 10px;
   padding: 10px 14px;
@@ -124,12 +163,22 @@ button {
   width: 100%;
 }
 
-button:hover {
+button:hover,
+.home-button:hover {
   background: var(--primary-hover);
 }
 
-button:active {
+button:active,
+.home-button:active {
   transform: translateY(1px);
+}
+
+.home-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  text-decoration: none;
 }
 
 button:disabled {
@@ -290,6 +339,10 @@ th {
     justify-content: center;
     gap: 10px;
     flex-wrap: wrap;
+  }
+
+  .home-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

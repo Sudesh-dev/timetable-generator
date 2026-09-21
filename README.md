@@ -142,6 +142,7 @@ For a deployed frontend, set `VITE_API_URL` to the public backend API URL.
 
 - `POST /api/subjects`
 - `GET /api/subjects`
+- `PUT /api/subjects/:id`
 - `DELETE /api/subjects/:id`
 
 ### Timetable
@@ -153,7 +154,6 @@ For a deployed frontend, set `VITE_API_URL` to the public backend API URL.
 - `GET /api/timetable`
 - `GET /api/timetable/:sectionId`
 - `GET /api/timetable/teacher/:teacherId`
-- `PUT /api/timetable/slot`
 
 ## Generation Rules
 

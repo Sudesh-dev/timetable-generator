@@ -1,12 +1,16 @@
 const Section = require("../models/Section");
 require("../models/Department");
 
+function errorStatus(err) {
+  return err.name === "ValidationError" || err.name === "CastError" ? 400 : 500;
+}
+
 exports.createSection = async (req, res) => {
   try {
     const section = await Section.create(req.body);
     res.status(201).json(section);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(errorStatus(err)).json({ error: err.message });
   }
 };
 
@@ -15,7 +19,7 @@ exports.getSections = async (req, res) => {
     const sections = await Section.find().populate("departmentId");
     res.json(sections);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(errorStatus(err)).json({ error: err.message });
   }
 };
 
@@ -32,7 +36,7 @@ exports.updateSection = async (req, res) => {
 
     res.json(section);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(errorStatus(err)).json({ error: err.message });
   }
 };
 
@@ -46,6 +50,6 @@ exports.deleteSection = async (req, res) => {
 
     res.json({ message: "Section deleted" });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(errorStatus(err)).json({ error: err.message });
   }
 };

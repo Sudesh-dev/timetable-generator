@@ -2,8 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import API from "../api/api";
 import TimetableGrid from "../components/TimetableGrid";
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
 
 const ROOM_POOL = [{ name: "Lab 1" }, { name: "Lab 2" }];
 
@@ -23,6 +21,8 @@ export default function GeneratePage() {
   const [sections, setSections] = useState([]);
   const [semester, setSemester] = useState("");
   const [sectionId, setSectionId] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
   const [allSubjects, setAllSubjects] = useState([]);
   const [timetable, setTimetable] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -45,14 +45,6 @@ export default function GeneratePage() {
     );
   }, [semester, sectionId, allSubjects]);
 
-  const handleBack = () => {
-    if (window.history.length > 1) {
-      navigate(-1);
-      return;
-    }
-    navigate("/");
-  };
-
   // LOAD SECTIONS + SUBJECTS
   useEffect(() => {
     API.get("/sections")
@@ -67,6 +59,8 @@ export default function GeneratePage() {
   const clearTimetable = () => {
     savedLoadAbort.current?.abort();
     setSectionId("");
+    setStartDate("");
+    setEndDate("");
     setTimetable(null);
     setIsSaved(false);
     setHasUnsavedChanges(false);
@@ -85,6 +79,8 @@ export default function GeneratePage() {
       .then((res) => {
         if (controller.signal.aborted) return;
         setTimetable(normalizeTimetable(res.data));
+        setStartDate(res.data.workingPeriod?.startDate || "");
+        setEndDate(res.data.workingPeriod?.endDate || "");
         setIsSaved(true);
         setHasUnsavedChanges(false);
         setVariationSeed(null);
@@ -115,6 +111,16 @@ export default function GeneratePage() {
       return;
     }
 
+    if (!startDate || !endDate) {
+      alert("Select the start and last working dates");
+      return;
+    }
+
+    if (endDate < startDate) {
+      alert("Last working date must be on or after the start working date");
+      return;
+    }
+
     try {
       savedLoadAbort.current?.abort();
       setLoading(true);
@@ -122,7 +128,8 @@ export default function GeneratePage() {
       const res = await API.post("/timetable/generate", {
         sectionId,
         classroom: "CSLH-001",
-        roomPool: ROOM_POOL
+        roomPool: ROOM_POOL,
+        workingPeriod: { startDate, endDate },
       });
 
       setTimetable(normalizeTimetable(res.data.timetable));
@@ -144,6 +151,10 @@ export default function GeneratePage() {
       alert("Generate or load a timetable before saving");
       return;
     }
+    if (!startDate || !endDate || endDate < startDate) {
+      alert("Select a valid start and last working date before saving");
+      return;
+    }
 
     try {
       setSaving(true);
@@ -154,6 +165,7 @@ export default function GeneratePage() {
         sectionId,
         roomPool: ROOM_POOL,
         grid: timetable.grid,
+        workingPeriod: { startDate, endDate },
       };
 
       if (!hasUnsavedChanges) payload.variationSeed = variationSeed;
@@ -179,6 +191,7 @@ export default function GeneratePage() {
         sectionId,
         roomPool: ROOM_POOL,
         grid,
+        workingPeriod: { startDate, endDate },
       });
 
       setTimetable((current) => ({ ...current, grid }));
@@ -199,8 +212,18 @@ export default function GeneratePage() {
     }
   };
 
+  const updateWorkingDate = (setter, value) => {
+    setter(value);
+    if (timetable?.grid) {
+      setIsSaved(false);
+      setHasUnsavedChanges(true);
+      setShowPreview(false);
+    }
+  };
+
   // 🔥 CAPTURE FULL CONTENT (NO CROP)
   const captureFull = async () => {
+    const { default: html2canvas } = await import("html2canvas");
     const element = document.getElementById("timetable-area");
 
     const originalHeight = element.style.height;
@@ -240,6 +263,7 @@ export default function GeneratePage() {
 
     const canvas = await captureFull();
     const imgData = canvas.toDataURL("image/png");
+    const { jsPDF } = await import("jspdf");
 
     const pdf = new jsPDF("landscape", "mm", "a4");
 
@@ -265,7 +289,7 @@ export default function GeneratePage() {
     <div className="page-shell content-narrow">
 
       <div className="page-actions">
-        <button className="btn-secondary" onClick={handleBack}>Back</button>
+        <button className="btn-secondary" onClick={() => navigate("/")}>Back to Home</button>
       </div>
 
       <h1>Generate Timetable</h1>
@@ -292,6 +316,8 @@ export default function GeneratePage() {
               savedLoadAbort.current?.abort();
               setSectionId(e.target.value);
               setTimetable(null);
+              setStartDate("");
+              setEndDate("");
               setIsSaved(false);
               setHasUnsavedChanges(false);
               setVariationSeed(null);
@@ -307,11 +333,35 @@ export default function GeneratePage() {
               ))}
           </select>
 
+          <label className="field-label">
+            Start Working Day
+            <input
+              type="date"
+              value={startDate}
+              disabled={!sectionId || validatingMove}
+              onChange={(event) => updateWorkingDate(setStartDate, event.target.value)}
+            />
+          </label>
+
+          <label className="field-label">
+            Last Working Day
+            <input
+              type="date"
+              value={endDate}
+              min={startDate || undefined}
+              disabled={!sectionId || validatingMove}
+              onChange={(event) => updateWorkingDate(setEndDate, event.target.value)}
+            />
+          </label>
+
           <button
             disabled={
               !semester ||
               !sectionId ||
               subjects.length === 0 ||
+              !startDate ||
+              !endDate ||
+              endDate < startDate ||
               loading ||
               validatingMove
             }
@@ -356,11 +406,19 @@ export default function GeneratePage() {
 
       {semester && sectionId && subjects.length > 0 && timetable?.grid?.length > 0 && (
         <>
+          <p className="muted edit-instructions">
+            Edit manually by clicking a class and then its destination, or drag and drop it.
+            Every proposed move is checked before it is applied.
+          </p>
+
           <div id="timetable-area">
 
             <div className="card">
               <TimetableGrid
+                key={`${sectionId}:${variationSeed ?? timetable._id ?? "saved"}`}
                 data={timetable.grid}
+                subjects={subjects}
+                workingPeriod={{ startDate, endDate }}
                 editable={!loading && !saving && !validatingMove}
                 onGridChange={updateGrid}
                 onInvalidMove={(message) => alert(message)}
@@ -377,7 +435,7 @@ export default function GeneratePage() {
                   ? "Saved in the database — preview and download are available."
                   : hasUnsavedChanges
                     ? "Unsaved changes — save the altered timetable before downloading."
-                    : "Preview only — drag classes to edit, then save before downloading."}
+                    : "Preview only — drag a class or click a source and destination to edit, then save before downloading."}
             </div>
 
             <button

@@ -9,7 +9,6 @@ router.post("/validate-edited", timetableController.validateEdited);
 router.post("/save-edited", timetableController.saveEdited);
 router.get("/teacher/:teacherId", timetableController.getByTeacher);
 router.get("/", timetableController.getAll);
-router.put("/slot", timetableController.updateSlot);
 
 // ❗ dynamic route LAST
 router.get("/:sectionId", timetableController.getBySection);

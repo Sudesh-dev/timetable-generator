@@ -38,56 +38,110 @@ export default function SubjectForm() {
   const [subjectsList, setSubjectsList] = useState([]);
   const [filterSemester, setFilterSemester] = useState("");
   const [filterSection, setFilterSection] = useState("");
-
-  useEffect(() => {
-    loadData();
-    fetchSubjects();
-  }, []);
-
-  const loadData = async () => {
-    const t = await API.get("/teachers");
-    const s = await API.get("/sections");
-    setTeachers(t.data);
-    setSections(s.data);
-  };
+  const [editingId, setEditingId] = useState(null);
 
   const fetchSubjects = async () => {
     const res = await API.get("/subjects");
     setSubjectsList(res.data);
   };
 
-  const handleSubmit = async () => {
-    await API.post("/subjects", {
-      name,
-      code,
-      type,
-      weeklySlots,
-      sectionId,
-      semester, // ✅ added
-      allowedTeachers: [selectedTeacher]
-    });
+  useEffect(() => {
+    let active = true;
 
-    fetchSubjects();
+    Promise.all([
+      API.get("/teachers"),
+      API.get("/sections"),
+      API.get("/subjects"),
+    ])
+      .then(([teacherResponse, sectionResponse, subjectResponse]) => {
+        if (!active) return;
+        setTeachers(teacherResponse.data);
+        setSections(sectionResponse.data);
+        setSubjectsList(subjectResponse.data);
+      })
+      .catch(() => {
+        if (active) alert("Failed to load subject setup data");
+      });
 
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const resetForm = () => {
     setName("");
     setCode("");
+    setType("theory");
     setWeeklySlots("");
     setSelectedTeacher("");
+    setEditingId(null);
+  };
+
+  const handleSubmit = async () => {
+    const parsedWeeklySlots = Number(weeklySlots);
+
+    if (!name.trim() || !code.trim()) {
+      alert("Subject name and code are required");
+      return;
+    }
+
+    if (!sectionId || !selectedTeacher) {
+      alert("Select a section and teacher");
+      return;
+    }
+
+    if (!Number.isInteger(parsedWeeklySlots) || parsedWeeklySlots < 1) {
+      alert("Weekly slots must be a positive integer");
+      return;
+    }
+
+    if (type === "lab" && parsedWeeklySlots % 2 !== 0) {
+      alert("Lab weekly slots must be divisible by the 2-period lab duration");
+      return;
+    }
+
+    const payload = {
+      name: name.trim(),
+      code: code.trim(),
+      type,
+      weeklySlots: parsedWeeklySlots,
+      sectionId,
+      allowedTeachers: [selectedTeacher],
+    };
+
+    try {
+      if (editingId) {
+        await API.put(`/subjects/${editingId}`, payload);
+      } else {
+        await API.post("/subjects", payload);
+      }
+
+      await fetchSubjects();
+      resetForm();
+    } catch (err) {
+      alert(err.response?.data?.error || "Failed to save subject");
+    }
   };
 
   const handleDelete = async (id) => {
-    await API.delete(`/subjects/${id}`);
-    fetchSubjects();
+    try {
+      await API.delete(`/subjects/${id}`);
+      await fetchSubjects();
+      if (editingId === id) resetForm();
+    } catch (err) {
+      alert(err.response?.data?.error || "Failed to delete subject");
+    }
   };
 
   const handleEdit = (s) => {
+    setEditingId(s._id);
     setName(s.name);
     setCode(s.code);
     setType(s.type);
     setWeeklySlots(s.weeklySlots);
     setSectionId(s.sectionId?._id || s.sectionId);
     setSelectedTeacher(s.allowedTeachers?.[0]?._id || s.allowedTeachers?.[0]);
-    setSemester(s.semester || ""); // ✅
+    setSemester(String(s.sectionId?.semester || ""));
   };
 
   const filteredSubjects = subjectsList.filter((s) => {
@@ -100,7 +154,7 @@ export default function SubjectForm() {
     return sectionMatch && semesterMatch;
   });
 
-  const disabled = !sectionId; // ✅ KEY FIX
+  const disabled = !semester || !sectionId;
   const noTeachers = teachers.length === 0;
   const noSections = sections.length === 0;
 
@@ -118,7 +172,10 @@ export default function SubjectForm() {
 
           <select
             value={semester}
-            onChange={(e)=>setSemester(e.target.value)}
+            onChange={(e) => {
+              setSemester(e.target.value);
+              setSectionId("");
+            }}
             style={input}
           >
             <option value="">Select Semester</option>
@@ -131,11 +188,14 @@ export default function SubjectForm() {
             value={sectionId}
             onChange={(e)=>setSectionId(e.target.value)}
             style={input}
+            disabled={!semester}
           >
             <option value="">Select Section</option>
-            {sections.map(s=>(
-              <option key={s._id} value={s._id}>{s.name}</option>
-            ))}
+            {sections
+              .filter((s) => String(s.semester) === String(semester))
+              .map((s) => (
+                <option key={s._id} value={s._id}>{s.name}</option>
+              ))}
           </select>
 
         </div>
@@ -145,7 +205,7 @@ export default function SubjectForm() {
         )}
 
         {noTeachers && (
-          <div className="empty-state inline-empty">No teachers found. Add a professor first.</div>
+          <div className="empty-state inline-empty">No teachers found. Add a teacher first.</div>
         )}
 
         {/* ✅ FORM (DISABLED UNTIL SECTION SELECTED) */}
@@ -177,9 +237,16 @@ export default function SubjectForm() {
 
         </div>
 
-        <button disabled={disabled} onClick={handleSubmit} style={button}>
-          ➕ Add Subject
-        </button>
+        <div className="button-row">
+          <button disabled={disabled} onClick={handleSubmit} style={button}>
+            {editingId ? "Save Subject Changes" : "➕ Add Subject"}
+          </button>
+          {editingId && (
+            <button className="btn-secondary" onClick={resetForm} style={button}>
+              Cancel Edit
+            </button>
+          )}
+        </div>
       </div>
 
       {/* TABLE (UNCHANGED UI) */}

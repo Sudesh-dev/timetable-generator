@@ -14,9 +14,9 @@ const unavailableSlotSchema = new mongoose.Schema(
 
 const teacherSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true },
-    teacherId: { type: String, default: "" },
-    email: { type: String, default: "" },
+    name: { type: String, required: true, trim: true },
+    teacherId: { type: String, default: "", trim: true },
+    email: { type: String, default: "", trim: true },
     // A teacher may opt for a lower load, but the institutional maximum is
     // always three sessions per day.
     maxSessionsPerDay: { type: Number, min: 1, max: 3, default: 3 },

@@ -14,8 +14,8 @@ export default function SectionForm() {
       return;
     }
 
-    if (!Number.isInteger(parsedSemester) || parsedSemester <= 0) {
-      alert("Semester must be a positive integer");
+    if (!Number.isInteger(parsedSemester) || parsedSemester < 1 || parsedSemester > 8) {
+      alert("Semester must be an integer from 1 to 8");
       return;
     }
 
@@ -30,7 +30,7 @@ export default function SectionForm() {
       setName("");
       setSemester("");
       setClassroom("");
-    } catch (err) {
+    } catch {
       alert("Failed to add section");
     }
   };

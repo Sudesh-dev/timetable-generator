@@ -26,6 +26,31 @@ function cellsBelongToSameBlock(first, second) {
   return Boolean(firstKey) && firstKey === getCellKey(second);
 }
 
+function getEntries(cell) {
+  if (!cell || typeof cell !== "object") return [];
+  if (Array.isArray(cell)) return cell.flatMap(getEntries);
+  if (Array.isArray(cell.parallelSessions)) {
+    return cell.parallelSessions.flatMap(getEntries);
+  }
+  return [cell];
+}
+
+function getSubjectLabel(cell) {
+  return [
+    ...new Set(
+      getEntries(cell)
+        .map((entry) => entry.subjectName)
+        .filter(Boolean)
+    ),
+  ].join(" / ");
+}
+
+function formatWorkingDate(value) {
+  if (!value) return "Not selected";
+  const [year, month, day] = value.split("-");
+  return year && month && day ? `${day}/${month}/${year}` : value;
+}
+
 function getBlock(grid, dayIndex, slotIndex) {
   const day = grid[dayIndex] || [];
   const cell = day[slotIndex];
@@ -127,6 +152,8 @@ function moveOrSwapBlock(data, sourcePosition, targetPosition) {
 
 export default function TimetableGrid({
   data,
+  subjects = [],
+  workingPeriod = {},
   editable = false,
   onGridChange,
   onInvalidMove,
@@ -134,6 +161,20 @@ export default function TimetableGrid({
   const safeData = Array.isArray(data) ? data : [];
   const [dragSource, setDragSource] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
+  const [selectedSource, setSelectedSource] = useState(null);
+
+  const moveClass = async (source, target) => {
+    const result = moveOrSwapBlock(safeData, source, target);
+
+    if (result.error) {
+      onInvalidMove?.(result.error);
+      return false;
+    }
+
+    const accepted = await onGridChange?.(result.grid);
+    if (accepted !== false) setSelectedSource(null);
+    return accepted !== false;
+  };
 
   const startDragging = (event, day, slot) => {
     if (!editable) return;
@@ -148,15 +189,30 @@ export default function TimetableGrid({
 
     if (!editable || !dragSource) return;
 
-    const result = moveOrSwapBlock(safeData, dragSource, { day, slot });
+    const source = dragSource;
     setDragSource(null);
+    await moveClass(source, { day, slot });
+  };
 
-    if (result.error) {
-      onInvalidMove?.(result.error);
+  const selectOrMoveClass = async (day, slot, cell) => {
+    if (!editable) return;
+
+    if (!selectedSource) {
+      if (!cell) {
+        onInvalidMove?.("Select an occupied class first, then select its destination.");
+        return;
+      }
+      const block = getBlock(safeData, day, slot);
+      setSelectedSource({ day, slot: block?.start ?? slot });
       return;
     }
 
-    await onGridChange?.(result.grid);
+    if (selectedSource.day === day && selectedSource.slot === slot) {
+      setSelectedSource(null);
+      return;
+    }
+
+    await moveClass(selectedSource, { day, slot });
   };
 
   function getSpan(day, startIndex) {
@@ -181,13 +237,7 @@ export default function TimetableGrid({
 
   function renderCell(cell) {
     if (!cell || typeof cell !== "object") return "";
-    return (
-      <div>
-        <div>{cell.subjectName || ""}</div>
-        {cell.teacherName && <small>{cell.teacherName}</small>}
-        {cell.room && <small style={{ display: "block" }}>{cell.room}</small>}
-      </div>
-    );
+    return <div>{getSubjectLabel(cell)}</div>;
   }
 
   return (
@@ -247,6 +297,9 @@ export default function TimetableGrid({
 
                     const isDropTarget =
                       dropTarget?.day === dIndex && dropTarget?.slot === sIndex;
+                    const isSelected =
+                      selectedSource?.day === dIndex &&
+                      selectedSource?.slot === sIndex;
 
                     return (
                       <td
@@ -256,6 +309,7 @@ export default function TimetableGrid({
                           ...td,
                           ...(editable && cell ? draggableCellStyle : {}),
                           ...(isDropTarget ? dropTargetStyle : {}),
+                          ...(isSelected ? selectedCellStyle : {}),
                         }}
                         draggable={editable && Boolean(cell)}
                         onDragStart={(event) => startDragging(event, dIndex, sIndex)}
@@ -274,11 +328,14 @@ export default function TimetableGrid({
                           }
                         }}
                         onDrop={(event) => dropClass(event, dIndex, sIndex)}
+                        onClick={() => selectOrMoveClass(dIndex, sIndex, cell)}
                         title={
                           editable
                             ? cell
-                              ? "Drag to move or swap this class"
-                              : "Drop a class here"
+                              ? "Drag this class, or click it and then click a destination"
+                              : selectedSource
+                                ? "Move the selected class here"
+                                : "Select an occupied class first"
                             : undefined
                         }
                       >
@@ -294,7 +351,7 @@ export default function TimetableGrid({
       </div>
 
       <div style={{ marginTop:30 }}>
-        <h3 style={{ textAlign:"center" }}>Faculty Mapping</h3>
+        <h3 style={{ textAlign:"center" }}>Subject Details</h3>
 
         <div className="table-wrap">
           <table style={{
@@ -305,14 +362,16 @@ export default function TimetableGrid({
             <thead>
               <tr>
                 <th style={th}>Subject</th>
+                <th style={th}>Code</th>
                 <th style={th}>Faculty</th>
               </tr>
             </thead>
 
             <tbody>
-              {extractFaculty(safeData).map((row, i)=>(
-                <tr key={i}>
+              {extractSubjectDetails(safeData, subjects).map((row)=>(
+                <tr key={`${row.subject}-${row.code}`}>
                   <td style={td}>{row.subject}</td>
+                  <td style={td}>{row.code}</td>
                   <td style={td}>{row.teacher}</td>
                 </tr>
               ))}
@@ -320,29 +379,57 @@ export default function TimetableGrid({
           </table>
         </div>
       </div>
+
+      <div className="table-wrap">
+        <table style={{ width:"100%", borderCollapse:"collapse", marginTop:10 }}>
+          <tbody>
+            <tr>
+              <th style={th}>Start Working Day</th>
+              <td style={td}>{formatWorkingDate(workingPeriod.startDate)}</td>
+              <th style={th}>Last Working Day</th>
+              <td style={td}>{formatWorkingDate(workingPeriod.endDate)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
 
-function extractFaculty(data) {
-  const map = {};
+function extractSubjectDetails(data, subjects) {
+  const subjectCodes = new Map(
+    subjects.map((subject) => [String(subject._id), subject.code || "-"])
+  );
+  const map = new Map();
 
   data.forEach(day => {
     if (!Array.isArray(day)) return;
 
     day.forEach(cell => {
-      if (!cell || typeof cell !== "object") return;
+      getEntries(cell).forEach((entry) => {
+        if (!entry.subjectName) return;
 
-      if (cell.subjectName && !map[cell.subjectName]) {
-        map[cell.subjectName] = cell.teacherName || "Faculty";
-      }
+        const subjectId = String(entry.subjectId || entry.subjectName);
+        if (!map.has(subjectId)) {
+          map.set(subjectId, {
+            subject: entry.subjectName,
+            code: entry.subjectCode || subjectCodes.get(subjectId) || "-",
+            teachers: new Set(),
+          });
+        }
+
+        if (entry.teacherName) map.get(subjectId).teachers.add(entry.teacherName);
+      });
     });
   });
 
-  return Object.keys(map).map(key => ({
-    subject: key,
-    teacher: map[key]
-  }));
+  return [...map.values()]
+    .map((row) => ({
+      subject: row.subject,
+      code: row.code,
+      teacher: [...row.teachers].join(", ") || "Faculty",
+    }))
+    .sort((first, second) => first.code.localeCompare(second.code));
 }
 
 const th = {
@@ -389,4 +476,10 @@ const dropTargetStyle = {
   outline: "3px solid #0f6f8d",
   outlineOffset: "-3px",
   background: "#dff3f8",
+};
+
+const selectedCellStyle = {
+  outline: "3px solid #b54708",
+  outlineOffset: "-3px",
+  background: "#fff3e0",
 };

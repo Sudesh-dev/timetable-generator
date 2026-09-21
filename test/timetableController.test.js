@@ -7,6 +7,11 @@ const Teacher = require("../server/models/Teacher");
 const Timetable = require("../server/models/Timetable");
 const controller = require("../server/controllers/timetableController");
 
+const WORKING_PERIOD = {
+  startDate: "2026-08-01",
+  endDate: "2026-12-15",
+};
+
 function responseRecorder() {
   return {
     statusCode: 200,
@@ -103,6 +108,7 @@ test("failed preview generation reports warnings without writing to MongoDB", as
       body: {
         sectionId: "section-1",
         roomPool: [{ name: "Lab 1" }],
+        workingPeriod: WORKING_PERIOD,
       },
     };
     const res = responseRecorder();
@@ -144,6 +150,7 @@ test("generation stays unsaved until the explicit save endpoint is called", asyn
           sectionId: "section-1",
           roomPool,
           variationSeed: 12345,
+          workingPeriod: WORKING_PERIOD,
         },
       },
       previewResponse
@@ -164,6 +171,7 @@ test("generation stays unsaved until the explicit save endpoint is called", asyn
           roomPool,
           variationSeed: previewResponse.body.variationSeed,
           grid: previewResponse.body.timetable.grid,
+          workingPeriod: WORKING_PERIOD,
         },
       },
       saveResponse
@@ -175,6 +183,7 @@ test("generation stays unsaved until the explicit save endpoint is called", asyn
     assert.equal(saveResponse.body.timetable._id, "saved-timetable");
     assert.equal(stubs.updateCalls, 1);
     assert.equal(stubs.lastUpdate.update.status, "generated");
+    assert.deepEqual(stubs.lastUpdate.update.workingPeriod, WORKING_PERIOD);
   } finally {
     stubs.restore();
   }
@@ -203,6 +212,7 @@ test("save rejects a modified or stale preview without writing", async () => {
           sectionId: "section-1",
           roomPool: [],
           variationSeed: 67890,
+          workingPeriod: WORKING_PERIOD,
         },
       },
       previewResponse
@@ -222,6 +232,7 @@ test("save rejects a modified or stale preview without writing", async () => {
           roomPool: [],
           variationSeed: previewResponse.body.variationSeed,
           grid: changedGrid,
+          workingPeriod: WORKING_PERIOD,
         },
       },
       saveResponse
@@ -273,6 +284,7 @@ test("an altered timetable is validated and saved with edited status", async () 
           sectionId: "section-1",
           roomPool: [],
           grid,
+          workingPeriod: WORKING_PERIOD,
         },
       },
       response
@@ -284,6 +296,7 @@ test("an altered timetable is validated and saved with edited status", async () 
     assert.equal(stubs.updateCalls, 1);
     assert.equal(stubs.lastUpdate.update.status, "edited");
     assert.deepEqual(stubs.lastUpdate.update.grid, grid);
+    assert.deepEqual(stubs.lastUpdate.update.workingPeriod, WORKING_PERIOD);
   } finally {
     stubs.restore();
   }
@@ -340,6 +353,7 @@ test("drop validation blocks a teacher clash without writing to MongoDB", async 
           sectionId: "section-1",
           roomPool: [],
           grid,
+          workingPeriod: WORKING_PERIOD,
         },
       },
       response
@@ -352,4 +366,25 @@ test("drop validation blocks a teacher clash without writing to MongoDB", async 
   } finally {
     stubs.restore();
   }
+});
+
+test("generation rejects an invalid working date range before database access", async () => {
+  const response = responseRecorder();
+
+  await controller.generatePreview(
+    {
+      body: {
+        sectionId: "section-1",
+        roomPool: [],
+        workingPeriod: {
+          startDate: "2026-12-15",
+          endDate: "2026-08-01",
+        },
+      },
+    },
+    response
+  );
+
+  assert.equal(response.statusCode, 400);
+  assert.match(response.body.error, /working date range/i);
 });

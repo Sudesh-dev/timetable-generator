@@ -7,9 +7,9 @@ const sectionSchema = new mongoose.Schema(
       ref: "Department",
       default: null,
     },
-    name: { type: String, required: true },
-    semester: { type: Number, required: true },
-    classroom: { type: String, required: true },
+    name: { type: String, required: true, trim: true },
+    semester: { type: Number, required: true, min: 1, max: 8 },
+    classroom: { type: String, required: true, trim: true },
   },
   { timestamps: true }
 );

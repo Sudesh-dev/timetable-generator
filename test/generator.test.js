@@ -110,6 +110,11 @@ test("generates from arbitrary database subjects and exact weekly slots", () => 
   result.timetable.forEach((day) => assert.equal(day.length, 9));
 
   const cells = scheduledCells(result.timetable);
+  assert.ok(cells.every(({ entry }) => entry.subjectCode));
+  assert.equal(
+    cells.find(({ entry }) => entry.subjectId === "alg").entry.subjectCode,
+    "ALG"
+  );
   const counts = new Map();
   cells.forEach(({ entry }) => {
     counts.set(entry.subjectId, (counts.get(entry.subjectId) || 0) + 1);

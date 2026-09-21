@@ -1,11 +1,15 @@
 const Teacher = require("../models/Teacher");
 
+function errorStatus(err) {
+  return err.name === "ValidationError" || err.name === "CastError" ? 400 : 500;
+}
+
 exports.createTeacher = async (req, res) => {
   try {
     const teacher = await Teacher.create(req.body);
     res.status(201).json(teacher);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(errorStatus(err)).json({ error: err.message });
   }
 };
 
@@ -14,7 +18,7 @@ exports.getTeachers = async (req, res) => {
     const teachers = await Teacher.find().populate("subjects");
     res.json(teachers);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(errorStatus(err)).json({ error: err.message });
   }
 };
 
@@ -31,7 +35,7 @@ exports.updateTeacher = async (req, res) => {
 
     res.json(teacher);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(errorStatus(err)).json({ error: err.message });
   }
 };
 
@@ -45,6 +49,6 @@ exports.deleteTeacher = async (req, res) => {
 
     res.json({ message: "Teacher deleted" });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(errorStatus(err)).json({ error: err.message });
   }
 };

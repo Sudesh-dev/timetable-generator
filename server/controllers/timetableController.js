@@ -17,6 +17,32 @@ function resolveVariationSeed(value) {
   return Number.isFinite(numeric) ? numeric : Date.now();
 }
 
+function isISOCalendarDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
+
+function normalizeWorkingPeriod(value) {
+  const startDate = String(value?.startDate || "").trim();
+  const endDate = String(value?.endDate || "").trim();
+
+  if (
+    !isISOCalendarDate(startDate) ||
+    !isISOCalendarDate(endDate) ||
+    endDate < startDate
+  ) {
+    return null;
+  }
+
+  return { startDate, endDate };
+}
+
 function isExactGrid(grid) {
   return (
     Array.isArray(grid) &&
@@ -54,12 +80,13 @@ function sortedRecords(values, primaryField) {
   });
 }
 
-function previewTimetable(section, grid, existingTimetables) {
+function previewTimetable(section, grid, existingTimetables, workingPeriod) {
   return {
     sectionId: section._id,
     departmentId: section.departmentId || null,
     semester: section.semester,
     classroom: section.classroom,
+    workingPeriod,
     grid,
     warnings: [],
     generationContext: {
@@ -129,10 +156,11 @@ async function validateEditedForSection(sectionId, roomPool, grid) {
 exports.generatePreview = async (req, res) => {
   try {
     const { sectionId, roomPool } = req.body;
+    const workingPeriod = normalizeWorkingPeriod(req.body.workingPeriod);
 
-    if (!sectionId) {
+    if (!sectionId || !workingPeriod) {
       return res.status(400).json({
-        error: "sectionId is required",
+        error: "sectionId and a valid working date range are required",
       });
     }
 
@@ -148,7 +176,8 @@ exports.generatePreview = async (req, res) => {
     const timetable = previewTimetable(
       section,
       result.timetable,
-      existingTimetables
+      existingTimetables,
+      workingPeriod
     );
     timetable.warnings = result.warnings;
 
@@ -180,10 +209,16 @@ exports.generatePreview = async (req, res) => {
 exports.saveGenerated = async (req, res) => {
   try {
     const { sectionId, roomPool, variationSeed, grid } = req.body;
+    const workingPeriod = normalizeWorkingPeriod(req.body.workingPeriod);
 
-    if (!sectionId || variationSeed === undefined || !isExactGrid(grid)) {
+    if (
+      !sectionId ||
+      variationSeed === undefined ||
+      !isExactGrid(grid) ||
+      !workingPeriod
+    ) {
       return res.status(400).json({
-        error: "sectionId, variationSeed, and a 6 x 9 preview grid are required",
+        error: "sectionId, variationSeed, working dates, and a 6 x 9 preview grid are required",
       });
     }
 
@@ -222,6 +257,7 @@ exports.saveGenerated = async (req, res) => {
         departmentId: section.departmentId || null,
         semester: section.semester,
         classroom: section.classroom,
+        workingPeriod,
         grid: result.timetable,
         warnings: result.warnings || [],
         generationContext,
@@ -246,11 +282,12 @@ exports.saveGenerated = async (req, res) => {
 exports.validateEdited = async (req, res) => {
   try {
     const { sectionId, roomPool, grid } = req.body;
+    const workingPeriod = normalizeWorkingPeriod(req.body.workingPeriod);
 
-    if (!sectionId || !isExactGrid(grid)) {
+    if (!sectionId || !isExactGrid(grid) || !workingPeriod) {
       return res.status(400).json({
         success: false,
-        error: "sectionId and an edited 6 x 9 timetable grid are required",
+        error: "sectionId, working dates, and an edited 6 x 9 timetable grid are required",
       });
     }
 
@@ -279,10 +316,11 @@ exports.validateEdited = async (req, res) => {
 exports.saveEdited = async (req, res) => {
   try {
     const { sectionId, roomPool, grid } = req.body;
+    const workingPeriod = normalizeWorkingPeriod(req.body.workingPeriod);
 
-    if (!sectionId || !isExactGrid(grid)) {
+    if (!sectionId || !isExactGrid(grid) || !workingPeriod) {
       return res.status(400).json({
-        error: "sectionId and an edited 6 x 9 timetable grid are required",
+        error: "sectionId, working dates, and an edited 6 x 9 timetable grid are required",
       });
     }
 
@@ -313,6 +351,7 @@ exports.saveEdited = async (req, res) => {
         departmentId: section.departmentId || null,
         semester: section.semester,
         classroom: section.classroom,
+        workingPeriod,
         grid,
         warnings: [],
         generationContext,
@@ -378,6 +417,7 @@ exports.getByTeacher = async (req, res) => {
         section: tt.sectionId,
         semester: tt.semester,
         classroom: tt.classroom,
+        workingPeriod: tt.workingPeriod,
         grid: teacherGrid,
         warnings: tt.warnings,
       };
@@ -406,60 +446,6 @@ exports.getAll = async (req, res) => {
         grid: normalizeGrid(timetable.grid),
       }))
     );
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-};
-
-exports.updateSlot = async (req, res) => {
-  try {
-    const { timetableId, day, slot, value } = req.body;
-
-    if (
-      timetableId === undefined ||
-      day === undefined ||
-      slot === undefined
-    ) {
-      return res.status(400).json({
-        error: "timetableId, day, and slot are required",
-      });
-    }
-
-    const timetable = await Timetable.findById(timetableId);
-    if (!timetable) {
-      return res.status(404).json({ error: "Timetable not found" });
-    }
-
-    timetable.grid = normalizeGrid(timetable.grid);
-
-    const dayIndex = Number(day);
-    const slotIndex = Number(slot);
-
-    if (!Number.isInteger(dayIndex) || !Number.isInteger(slotIndex)) {
-      return res.status(400).json({ error: "day and slot must be integers" });
-    }
-
-    if (dayIndex < 0 || dayIndex >= timetable.grid.length) {
-      return res.status(400).json({ error: "Invalid day index" });
-    }
-
-    if (!Array.isArray(timetable.grid[dayIndex])) {
-      return res.status(400).json({ error: "Invalid timetable day data" });
-    }
-
-    if (slotIndex < 0 || slotIndex >= timetable.grid[dayIndex].length) {
-      return res.status(400).json({ error: "Invalid slot index" });
-    }
-
-    timetable.grid[dayIndex][slotIndex] = value || null;
-    timetable.status = "edited";
-    timetable.markModified("grid");
-    await timetable.save();
-
-    return res.json({
-      success: true,
-      timetable,
-    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

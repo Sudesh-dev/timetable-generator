@@ -169,6 +169,7 @@ function buildRequirements(subjects, teachers, warnings) {
   subjects.forEach((subject, index) => {
     const subjectId = getId(subject) || `subject-${index}`;
     const subjectName = String(subject.name || subject.code || "Unnamed subject").trim();
+    const subjectCode = String(subject.code || "").trim();
     const weeklySlots = Number(subject.weeklySlots);
     const lab = isLab(subject);
     const type = String(subject.type || "theory").toLowerCase();
@@ -271,6 +272,7 @@ function buildRequirements(subjects, teachers, warnings) {
         batchOrder: batchIndex,
         subjectId,
         subjectName,
+        subjectCode,
         type,
         duration,
         sessions: requestedSessions,
@@ -795,6 +797,7 @@ function buildEntry(
   return {
     subjectId: requirement.subjectId,
     subjectName: requirement.subjectName,
+    subjectCode: requirement.subjectCode,
     teacherId,
     teacherName: teacherNames.get(teacherId) || "Unknown",
     room,
@@ -1065,6 +1068,7 @@ function finalizeGrid(grid) {
       return {
         subjectId: sorted.map((entry) => entry.subjectId).join("+"),
         subjectName: sorted.map(describeParallelEntry).join(" / "),
+        subjectCode: sorted.map((entry) => entry.subjectCode).join(" / "),
         teacherId: null,
         teacherName: sorted.map((entry) => entry.teacherName).join(" / "),
         room: sorted.map((entry) => entry.room).join(" / "),

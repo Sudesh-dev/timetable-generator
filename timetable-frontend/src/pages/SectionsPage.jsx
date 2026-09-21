@@ -11,20 +11,26 @@ export default function SectionsPage() {
   const [classroom, setClassroom] = useState("");
   const [editing, setEditing] = useState(null);
 
-  const handleBack = () => {
-    if (window.history.length > 1) {
-      navigate(-1);
-      return;
-    }
-    navigate("/");
-  };
-
   const load = async () => {
     const res = await API.get("/sections");
     setSections(res.data);
   };
 
-  useEffect(()=>{ load(); }, []);
+  useEffect(() => {
+    let active = true;
+
+    API.get("/sections")
+      .then((res) => {
+        if (active) setSections(res.data);
+      })
+      .catch(() => {
+        if (active) alert("Failed to load sections");
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const add = async () => {
     const parsedSemester = Number(semester);
@@ -34,8 +40,8 @@ export default function SectionsPage() {
       return;
     }
 
-    if (!Number.isInteger(parsedSemester) || parsedSemester <= 0) {
-      alert("Semester must be a positive integer");
+    if (!Number.isInteger(parsedSemester) || parsedSemester < 1 || parsedSemester > 8) {
+      alert("Semester must be an integer from 1 to 8");
       return;
     }
 
@@ -48,7 +54,7 @@ export default function SectionsPage() {
       setName("");
       setSemester("");
       setClassroom("");
-      load();
+      await load();
     } catch {
       alert("Failed to add section");
     }
@@ -62,8 +68,8 @@ export default function SectionsPage() {
       return;
     }
 
-    if (!Number.isInteger(parsedSemester) || parsedSemester <= 0) {
-      alert("Semester must be a positive integer");
+    if (!Number.isInteger(parsedSemester) || parsedSemester < 1 || parsedSemester > 8) {
+      alert("Semester must be an integer from 1 to 8");
       return;
     }
 
@@ -74,7 +80,7 @@ export default function SectionsPage() {
         classroom: editing.classroom.trim(),
       });
       setEditing(null);
-      load();
+      await load();
     } catch {
       alert("Failed to update section");
     }
@@ -83,7 +89,7 @@ export default function SectionsPage() {
   const del = async (id) => {
     try {
       await API.delete(`/sections/${id}`);
-      load();
+      await load();
     } catch {
       alert("Failed to delete section");
     }
@@ -92,7 +98,7 @@ export default function SectionsPage() {
   return (
     <div className="page-shell">
       <div className="page-actions">
-        <button className="btn-secondary" onClick={handleBack}>Back</button>
+        <button className="btn-secondary" onClick={() => navigate("/")}>Back to Home</button>
       </div>
 
       <div className="card">

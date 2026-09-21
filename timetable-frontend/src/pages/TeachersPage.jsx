@@ -10,20 +10,26 @@ export default function TeachersPage() {
   const [teacherId, setTeacherId] = useState("");
   const [editing, setEditing] = useState(null);
 
-  const handleBack = () => {
-    if (window.history.length > 1) {
-      navigate(-1);
-      return;
-    }
-    navigate("/");
-  };
-
   const load = async () => {
     const res = await API.get("/teachers");
     setTeachers(res.data);
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    let active = true;
+
+    API.get("/teachers")
+      .then((res) => {
+        if (active) setTeachers(res.data);
+      })
+      .catch(() => {
+        if (active) alert("Failed to load teachers");
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const addTeacher = async () => {
     if (!name.trim()) {
@@ -35,7 +41,7 @@ export default function TeachersPage() {
       await API.post("/teachers", { name: name.trim(), teacherId: teacherId.trim() });
       setName("");
       setTeacherId("");
-      load();
+      await load();
     } catch {
       alert("Failed to add teacher");
     }
@@ -53,7 +59,7 @@ export default function TeachersPage() {
         teacherId: (editing.teacherId || "").trim(),
       });
       setEditing(null);
-      load();
+      await load();
     } catch {
       alert("Failed to update teacher");
     }
@@ -62,7 +68,7 @@ export default function TeachersPage() {
   const deleteTeacher = async (id) => {
     try {
       await API.delete(`/teachers/${id}`);
-      load();
+      await load();
     } catch {
       alert("Failed to delete teacher");
     }
@@ -71,12 +77,12 @@ export default function TeachersPage() {
   return (
     <div className="page-shell">
       <div className="page-actions">
-        <button className="btn-secondary" onClick={handleBack}>Back</button>
+        <button className="btn-secondary" onClick={() => navigate("/")}>Back to Home</button>
       </div>
 
       <div className="card">
-        <h2>Manage Professors</h2>
-        <p className="muted">Create, update, and remove faculty records from one place.</p>
+        <h2>Manage Teachers</h2>
+        <p className="muted">Create, update, and remove teacher records from one place.</p>
 
         <div className="form-grid">
           <input placeholder="Name" value={name} onChange={e=>setName(e.target.value)} />
@@ -93,7 +99,7 @@ export default function TeachersPage() {
               {teachers.length === 0 ? (
                 <tr>
                   <td colSpan="4">
-                    <div className="empty-state">No professors added yet.</div>
+                    <div className="empty-state">No teachers added yet.</div>
                   </td>
                 </tr>
               ) : (
