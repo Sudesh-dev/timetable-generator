@@ -1,25 +1,6 @@
 import { useEffect, useState } from "react";
 import API from "../api/api";
 
-/* styles (unchanged) */
-const input = {
-  padding: "10px",
-  borderRadius: "8px",
-  border: "1px solid #cbd5e1",
-  fontSize: "14px"
-};
-
-const button = {
-  marginTop: "20px",
-  padding: "12px",
-  background: "#2563eb",
-  color: "white",
-  border: "none",
-  borderRadius: "8px",
-  fontWeight: "bold",
-  cursor: "pointer"
-};
-
 export default function SubjectForm() {
 
   const [name, setName] = useState("");
@@ -33,7 +14,7 @@ export default function SubjectForm() {
   const [sections, setSections] = useState([]);
   const [sectionId, setSectionId] = useState("");
 
-  const [semester, setSemester] = useState(""); // ✅ NEW
+  const [semester, setSemester] = useState("");
 
   const [subjectsList, setSubjectsList] = useState([]);
   const [filterSemester, setFilterSemester] = useState("");
@@ -161,43 +142,48 @@ export default function SubjectForm() {
   return (
     <div className="content-narrow stack">
 
-      <h2>📘 Subject Management</h2>
+      <h2>Subject Management</h2>
 
       <div className="card">
+        <div className="card-header">
+          <h3>{editingId ? "Edit Subject" : "Add Subject"}</h3>
+          <p className="muted">Choose a semester and section before entering subject details.</p>
+        </div>
 
-        <h3>Add Subject</h3>
+        <div className="form-section">
+          <div className="form-grid form-grid-two">
+            <label className="form-field">
+              <span>Semester</span>
+              <select
+                value={semester}
+                onChange={(e) => {
+                  setSemester(e.target.value);
+                  setSectionId("");
+                }}
+              >
+                <option value="">Select semester</option>
+                {[1,2,3,4,5,6,7,8].map(s=>(
+                  <option key={s} value={s}>Semester {s}</option>
+                ))}
+              </select>
+            </label>
 
-        {/* ✅ DROPDOWNS FIRST */}
-        <div className="form-grid">
-
-          <select
-            value={semester}
-            onChange={(e) => {
-              setSemester(e.target.value);
-              setSectionId("");
-            }}
-            style={input}
-          >
-            <option value="">Select Semester</option>
-            {[1,2,3,4,5,6,7,8].map(s=>(
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
-
-          <select
-            value={sectionId}
-            onChange={(e)=>setSectionId(e.target.value)}
-            style={input}
-            disabled={!semester}
-          >
-            <option value="">Select Section</option>
-            {sections
-              .filter((s) => String(s.semester) === String(semester))
-              .map((s) => (
-                <option key={s._id} value={s._id}>{s.name}</option>
-              ))}
-          </select>
-
+            <label className="form-field">
+              <span>Section</span>
+              <select
+                value={sectionId}
+                onChange={(e)=>setSectionId(e.target.value)}
+                disabled={!semester}
+              >
+                <option value="">Select section</option>
+                {sections
+                  .filter((s) => String(s.semester) === String(semester))
+                  .map((s) => (
+                    <option key={s._id} value={s._id}>{s.name}</option>
+                  ))}
+              </select>
+            </label>
+          </div>
         </div>
 
         {noSections && (
@@ -208,77 +194,99 @@ export default function SubjectForm() {
           <div className="empty-state inline-empty">No teachers found. Add a teacher first.</div>
         )}
 
-        {/* ✅ FORM (DISABLED UNTIL SECTION SELECTED) */}
-        <div className="form-grid" style={{ opacity: disabled ? 0.5 : 1 }}>
+        <div className="form-section">
+          <div className={`form-grid ${disabled ? "disabled-fields" : ""}`}>
+            <label className="form-field">
+              <span>Subject Name</span>
+              <input disabled={disabled} placeholder="Enter subject name" value={name}
+                onChange={(e) => setName(e.target.value)} />
+            </label>
 
-          <input disabled={disabled} placeholder="Name" value={name}
-            onChange={(e) => setName(e.target.value)} style={input} />
+            <label className="form-field">
+              <span>Subject Code</span>
+              <input disabled={disabled} placeholder="Enter subject code" value={code}
+                onChange={(e) => setCode(e.target.value)} />
+            </label>
 
-          <input disabled={disabled} placeholder="Code" value={code}
-            onChange={(e) => setCode(e.target.value)} style={input} />
+            <label className="form-field">
+              <span>Subject Type</span>
+              <select disabled={disabled} value={type}
+                onChange={(e) => setType(e.target.value)}>
+                <option value="theory">Theory</option>
+                <option value="lab">Lab</option>
+              </select>
+            </label>
 
-          <select disabled={disabled} value={type}
-            onChange={(e) => setType(e.target.value)} style={input}>
-            <option value="theory">Theory</option>
-            <option value="lab">Lab</option>
-          </select>
+            <label className="form-field">
+              <span>Weekly Slots</span>
+              <input disabled={disabled} type="number" min="1" placeholder="Enter weekly slots"
+                value={weeklySlots}
+                onChange={(e) => setWeeklySlots(e.target.value)} />
+            </label>
 
-          <input disabled={disabled} type="number" placeholder="Weekly Slots"
-            value={weeklySlots}
-            onChange={(e) => setWeeklySlots(e.target.value)} style={input} />
-
-          <select disabled={disabled} value={selectedTeacher}
-            onChange={(e) => setSelectedTeacher(e.target.value)} style={input}>
-            <option value="">Select Teacher</option>
-            {teachers.map(t => (
-              <option key={t._id} value={t._id}>{t.name}</option>
-            ))}
-          </select>
-
+            <label className="form-field">
+              <span>Assigned Teacher</span>
+              <select disabled={disabled} value={selectedTeacher}
+                onChange={(e) => setSelectedTeacher(e.target.value)}>
+                <option value="">Select teacher</option>
+                {teachers.map(t => (
+                  <option key={t._id} value={t._id}>{t.name}</option>
+                ))}
+              </select>
+            </label>
+          </div>
         </div>
 
-        <div className="button-row">
-          <button disabled={disabled} onClick={handleSubmit} style={button}>
-            {editingId ? "Save Subject Changes" : "➕ Add Subject"}
+        <div className="form-actions">
+          <button disabled={disabled} onClick={handleSubmit}>
+            {editingId ? "Save Subject Changes" : "Add Subject"}
           </button>
           {editingId && (
-            <button className="btn-secondary" onClick={resetForm} style={button}>
+            <button className="btn-secondary" onClick={resetForm}>
               Cancel Edit
             </button>
           )}
         </div>
       </div>
 
-      {/* TABLE (UNCHANGED UI) */}
       <div className="card">
-
-        <h3>Saved Subjects</h3>
-        <div className="form-grid" style={{ marginBottom: "15px" }}>
-          <select
-            value={filterSemester}
-            onChange={(e) => setFilterSemester(e.target.value)}
-            style={input}
-          >
-            <option value="">All Semesters</option>
-            {[1,2,3,4,5,6,7,8].map((sem) => (
-              <option key={sem} value={sem}>{sem}</option>
-            ))}
-          </select>
-
-          <select
-            value={filterSection}
-            onChange={(e) => setFilterSection(e.target.value)}
-            style={input}
-          >
-            <option value="">All Sections</option>
-            {sections
-              .filter((s) => !filterSemester || String(s.semester) === String(filterSemester))
-              .map((s) => (
-                <option key={s._id} value={s._id}>
-                  {s.name}
-                </option>
+        <div className="card-header">
+          <h3>Saved Subjects</h3>
+          <p className="muted">Filter subjects by semester or section.</p>
+        </div>
+        <div className="form-grid form-grid-two filter-row">
+          <label className="form-field">
+            <span>Semester Filter</span>
+            <select
+              value={filterSemester}
+              onChange={(e) => {
+                setFilterSemester(e.target.value);
+                setFilterSection("");
+              }}
+            >
+              <option value="">All semesters</option>
+              {[1,2,3,4,5,6,7,8].map((sem) => (
+                <option key={sem} value={sem}>Semester {sem}</option>
               ))}
-          </select>
+            </select>
+          </label>
+
+          <label className="form-field">
+            <span>Section Filter</span>
+            <select
+              value={filterSection}
+              onChange={(e) => setFilterSection(e.target.value)}
+            >
+              <option value="">All sections</option>
+              {sections
+                .filter((s) => !filterSemester || String(s.semester) === String(filterSemester))
+                .map((s) => (
+                  <option key={s._id} value={s._id}>
+                    {s.name}
+                  </option>
+                ))}
+            </select>
+          </label>
         </div>
 
         <div className="table-wrap">

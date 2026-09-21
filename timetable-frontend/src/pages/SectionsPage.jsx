@@ -96,30 +96,43 @@ export default function SectionsPage() {
   };
 
   return (
-    <div className="page-shell">
+    <div className="page-shell content-narrow">
       <div className="page-actions">
         <button className="btn-secondary" onClick={() => navigate("/")}>Back to Home</button>
       </div>
 
       <div className="card">
-        <h2>Manage Sections</h2>
-        <p className="muted">Each section requires a semester and classroom.</p>
+        <div className="card-header">
+          <h2>Manage Sections</h2>
+          <p className="muted">Each section requires a semester and classroom.</p>
+        </div>
 
         <div className="form-grid">
-          <input value={name} onChange={e=>setName(e.target.value)} placeholder="Section"/>
-          <input
-            type="number"
-            value={semester}
-            onChange={e=>setSemester(e.target.value)}
-            placeholder="Semester"
-          />
-          <input
-            value={classroom}
-            onChange={e=>setClassroom(e.target.value)}
-            placeholder="Classroom"
-          />
+          <label className="form-field">
+            <span>Section Name</span>
+            <input value={name} onChange={e=>setName(e.target.value)} placeholder="Enter section name"/>
+          </label>
+          <label className="form-field">
+            <span>Semester</span>
+            <select value={semester} onChange={e=>setSemester(e.target.value)}>
+              <option value="">Select semester</option>
+              {[1,2,3,4,5,6,7,8].map((value) => (
+                <option key={value} value={value}>Semester {value}</option>
+              ))}
+            </select>
+          </label>
+          <label className="form-field">
+            <span>Classroom</span>
+            <input
+              value={classroom}
+              onChange={e=>setClassroom(e.target.value)}
+              placeholder="Enter classroom"
+            />
+          </label>
         </div>
-        <button onClick={add}>Add</button>
+        <div className="form-actions">
+          <button onClick={add}>Add Section</button>
+        </div>
 
         <div className="table-wrap">
           <table>
@@ -155,19 +168,31 @@ export default function SectionsPage() {
 
         <Modal isOpen={!!editing} onClose={()=>setEditing(null)}>
           <h3>Edit Section</h3>
-          <input
-            value={editing?.name || ""}
-            onChange={(e)=>setEditing({...editing, name:e.target.value})}
-          />
-          <input
-            type="number"
-            value={editing?.semester || ""}
-            onChange={(e)=>setEditing({...editing, semester:e.target.value})}
-          />
-          <input
-            value={editing?.classroom || ""}
-            onChange={(e)=>setEditing({...editing, classroom:e.target.value})}
-          />
+          <label className="form-field">
+            <span>Section Name</span>
+            <input
+              value={editing?.name || ""}
+              onChange={(e)=>setEditing({...editing, name:e.target.value})}
+            />
+          </label>
+          <label className="form-field">
+            <span>Semester</span>
+            <select
+              value={editing?.semester || ""}
+              onChange={(e)=>setEditing({...editing, semester:e.target.value})}
+            >
+              {[1,2,3,4,5,6,7,8].map((value) => (
+                <option key={value} value={value}>Semester {value}</option>
+              ))}
+            </select>
+          </label>
+          <label className="form-field">
+            <span>Classroom</span>
+            <input
+              value={editing?.classroom || ""}
+              onChange={(e)=>setEditing({...editing, classroom:e.target.value})}
+            />
+          </label>
           <button onClick={update}>Save</button>
         </Modal>
       </div>

@@ -75,19 +75,29 @@ export default function TeachersPage() {
   };
 
   return (
-    <div className="page-shell">
+    <div className="page-shell content-narrow">
       <div className="page-actions">
         <button className="btn-secondary" onClick={() => navigate("/")}>Back to Home</button>
       </div>
 
       <div className="card">
-        <h2>Manage Teachers</h2>
-        <p className="muted">Create, update, and remove teacher records from one place.</p>
+        <div className="card-header">
+          <h2>Manage Teachers</h2>
+          <p className="muted">Create, update, and remove teacher records from one place.</p>
+        </div>
 
         <div className="form-grid">
-          <input placeholder="Name" value={name} onChange={e=>setName(e.target.value)} />
-          <input placeholder="ID" value={teacherId} onChange={e=>setTeacherId(e.target.value)} />
-          <button onClick={addTeacher}>Add</button>
+          <label className="form-field">
+            <span>Teacher Name</span>
+            <input placeholder="Enter teacher name" value={name} onChange={e=>setName(e.target.value)} />
+          </label>
+          <label className="form-field">
+            <span>Teacher ID</span>
+            <input placeholder="Enter teacher ID" value={teacherId} onChange={e=>setTeacherId(e.target.value)} />
+          </label>
+          <div className="form-action">
+            <button onClick={addTeacher}>Add Teacher</button>
+          </div>
         </div>
 
         <div className="table-wrap">
@@ -123,14 +133,20 @@ export default function TeachersPage() {
 
         <Modal isOpen={!!editing} onClose={()=>setEditing(null)}>
           <h3>Edit Teacher</h3>
-          <input
-            value={editing?.name || ""}
-            onChange={(e)=>setEditing({...editing, name:e.target.value})}
-          />
-          <input
-            value={editing?.teacherId || ""}
-            onChange={(e)=>setEditing({...editing, teacherId:e.target.value})}
-          />
+          <label className="form-field">
+            <span>Teacher Name</span>
+            <input
+              value={editing?.name || ""}
+              onChange={(e)=>setEditing({...editing, name:e.target.value})}
+            />
+          </label>
+          <label className="form-field">
+            <span>Teacher ID</span>
+            <input
+              value={editing?.teacherId || ""}
+              onChange={(e)=>setEditing({...editing, teacherId:e.target.value})}
+            />
+          </label>
           <button onClick={updateTeacher}>Save</button>
         </Modal>
       </div>

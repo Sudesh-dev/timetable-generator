@@ -295,46 +295,57 @@ export default function GeneratePage() {
       <h1>Generate Timetable</h1>
 
       <div className="card">
-        <div className="form-grid">
-          <select
-            value={semester}
-            disabled={validatingMove}
-            onChange={(e) => {
-              setSemester(e.target.value);
-              clearTimetable();
-            }}
-          >
-            <option value="">Select Semester</option>
-            {[1,2,3,4,5,6,7,8].map((sem) => (
-              <option key={sem} value={sem}>Semester {sem}</option>
-            ))}
-          </select>
+        <div className="card-header">
+          <h3>Timetable Details</h3>
+          <p className="muted">Select the class and working period before generating.</p>
+        </div>
 
-          <select
-            value={sectionId}
-            onChange={(e) => {
-              savedLoadAbort.current?.abort();
-              setSectionId(e.target.value);
-              setTimetable(null);
-              setStartDate("");
-              setEndDate("");
-              setIsSaved(false);
-              setHasUnsavedChanges(false);
-              setVariationSeed(null);
-              setShowPreview(false);
-            }}
-            disabled={!semester || validatingMove}
-          >
-            <option value="">Select Section</option>
-            {sections
-              .filter((s) => !semester || String(s.semester) === String(semester))
-              .map((s) => (
-                <option key={s._id} value={s._id}>{s.name}</option>
+        <div className="form-grid generate-controls">
+          <label className="form-field">
+            <span>Semester</span>
+            <select
+              value={semester}
+              disabled={validatingMove}
+              onChange={(e) => {
+                setSemester(e.target.value);
+                clearTimetable();
+              }}
+            >
+              <option value="">Select semester</option>
+              {[1,2,3,4,5,6,7,8].map((sem) => (
+                <option key={sem} value={sem}>Semester {sem}</option>
               ))}
-          </select>
+            </select>
+          </label>
+
+          <label className="form-field">
+            <span>Section</span>
+            <select
+              value={sectionId}
+              onChange={(e) => {
+                savedLoadAbort.current?.abort();
+                setSectionId(e.target.value);
+                setTimetable(null);
+                setStartDate("");
+                setEndDate("");
+                setIsSaved(false);
+                setHasUnsavedChanges(false);
+                setVariationSeed(null);
+                setShowPreview(false);
+              }}
+              disabled={!semester || validatingMove}
+            >
+              <option value="">Select section</option>
+              {sections
+                .filter((s) => !semester || String(s.semester) === String(semester))
+                .map((s) => (
+                  <option key={s._id} value={s._id}>{s.name}</option>
+                ))}
+            </select>
+          </label>
 
           <label className="field-label">
-            Start Working Day
+            <span>Start Working Day</span>
             <input
               type="date"
               value={startDate}
@@ -344,7 +355,7 @@ export default function GeneratePage() {
           </label>
 
           <label className="field-label">
-            Last Working Day
+            <span>Last Working Day</span>
             <input
               type="date"
               value={endDate}
@@ -354,21 +365,23 @@ export default function GeneratePage() {
             />
           </label>
 
-          <button
-            disabled={
-              !semester ||
-              !sectionId ||
-              subjects.length === 0 ||
-              !startDate ||
-              !endDate ||
-              endDate < startDate ||
-              loading ||
-              validatingMove
-            }
-            onClick={generate}
-          >
-            {loading ? "Generating..." : "Generate"}
-          </button>
+          <div className="form-action">
+            <button
+              disabled={
+                !semester ||
+                !sectionId ||
+                subjects.length === 0 ||
+                !startDate ||
+                !endDate ||
+                endDate < startDate ||
+                loading ||
+                validatingMove
+              }
+              onClick={generate}
+            >
+              {loading ? "Generating..." : "Generate Timetable"}
+            </button>
+          </div>
         </div>
 
         {semester && sectionId && subjects.length === 0 && (
@@ -378,7 +391,10 @@ export default function GeneratePage() {
 
       {semester && sectionId && subjects.length > 0 && (
         <div className="card">
-          <h3>Subjects & Teachers</h3>
+          <div className="card-header">
+            <h3>Subjects & Teachers</h3>
+            <p className="muted">Subjects included in this timetable.</p>
+          </div>
 
           <div className="table-wrap">
             <table>
